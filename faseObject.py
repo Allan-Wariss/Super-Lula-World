@@ -61,7 +61,7 @@ class FaseObject:
         ], dtype=np.uint32)
 
         # estilo 16 bits
-        self.tamanhoBloco = 3.0             # a arte foi desenhada com "pixels" de ~3 texels
+        self.tamanhoBloco = 2.0             # cada "pixel" retrô = 2x2 texels (3 deixava a arte borrada demais)
         self.niveisCor = (31.0, 63.0, 31.0) # RGB565
 
         self.shader = None
