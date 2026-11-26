@@ -5,29 +5,83 @@ from PIL import Image
 from OpenGL.GL import *
 from texture import Texture
 from shader import Shader
+from blocoObject import BlocoObject
+from particulasObject import ParticulasObject
 
 PASTA_BASE = os.path.dirname(os.path.abspath(__file__))
 PASTA_FASE = os.path.join(PASTA_BASE, 'textures', 'fase')
 PASTA_SHADERS = os.path.join(PASTA_BASE, 'shaders')
 
+# cores do mapa de colisão que viram entidades / áreas especiais
+COR_BLOCO_MURO = (0x00, 0x4a, 0xad)     # azul  -> blocos de muro
+COR_BLOCO_INTERROGACAO = (97, 193, 41)  # verde -> blocos [?]
+COR_CHEGADA = (255, 237, 0)             # amarelo -> fim da fase
+
+def mascaraCor(r, g, b, cor, tolerancia=48):
+    return (np.abs(r - cor[0]) < tolerancia) & (np.abs(g - cor[1]) < tolerancia) & (np.abs(b - cor[2]) < tolerancia)
+
+def regioes(mascara, areaMinima=30):
+    # separa a máscara em regiões conectadas e devolve o retângulo (x, y, largura, altura) de cada uma.
+    # regiões muito pequenas são sobras do antialiasing da imagem e são ignoradas
+    visitado = np.zeros(mascara.shape, dtype=bool)
+    altura, largura = mascara.shape
+    retangulos = []
+    for y0, x0 in zip(*np.nonzero(mascara)):
+        if visitado[y0, x0]:
+            continue
+        visitado[y0, x0] = True
+        pilha = [(y0, x0)]
+        xMin = xMax = x0
+        yMin = yMax = y0
+        area = 0
+        while pilha:
+            y, x = pilha.pop()
+            area += 1
+            xMin, xMax = min(xMin, x), max(xMax, x)
+            yMin, yMax = min(yMin, y), max(yMax, y)
+            for ny, nx in ((y + 1, x), (y - 1, x), (y, x + 1), (y, x - 1)):
+                if 0 <= ny < altura and 0 <= nx < largura and mascara[ny, nx] and not visitado[ny, nx]:
+                    visitado[ny, nx] = True
+                    pilha.append((ny, nx))
+        if area >= areaMinima:
+            retangulos.append((int(xMin), int(yMin), int(xMax - xMin + 1), int(yMax - yMin + 1)))
+    return retangulos
+
+def preencherComBlocos(tipo, retangulos):
+    # cada região vira uma fileira de blocos: quantos blocos cabem é a largura / altura arredondada,
+    # e eles são esticados um pouquinho para preencher a região inteira (bordas em pixels inteiros)
+    blocos = []
+    for x, y, larg, alt in retangulos:
+        if larg >= alt:
+            n = max(1, round(larg / alt))
+            bordas = [round(x + i * larg / n) for i in range(n + 1)]
+            for i in range(n):
+                blocos.append(BlocoObject(tipo, bordas[i], y, bordas[i + 1] - bordas[i], alt))
+        else:
+            # região em pé: empilha os blocos na vertical
+            n = max(1, round(alt / larg))
+            bordas = [round(y + i * alt / n) for i in range(n + 1)]
+            for i in range(n):
+                blocos.append(BlocoObject(tipo, x, bordas[i], larg, bordas[i + 1] - bordas[i]))
+    return blocos
+
 class FaseObject:
-    def __init__(self, imagem='fase-teste.png', colisao='fase-colisao-teste.png',
-                 colisaoEscalaX=1.06, colisaoDeslocY=9):
+    def __init__(self, imagem='fase-teste.png', colisao='fase-colisao-teste.png', escala=1):
         self.caminhoImagem = os.path.join(PASTA_FASE, imagem)
         self.caminhoColisao = os.path.join(PASTA_FASE, colisao)
 
-        # o mundo tem o tamanho da arte da fase, em pixels
+        # o mundo tem o tamanho da arte da fase multiplicado pela escala (em pixels do mundo)
         arte = Image.open(self.caminhoImagem)
-        self.largura, self.altura = arte.size
+        self.larguraArte, self.alturaArte = arte.size
+        self.escala = escala
+        self.largura = self.larguraArte * escala
+        self.altura = self.alturaArte * escala
 
         # ---- mapa de colisão ----
-        # a imagem de colisão foi desenhada um pouco menor que a arte: ela é esticada em X
-        # e descida em Y para os blocos pretos ficarem exatamente em cima do desenho.
-        # se a imagem de colisão for refeita alinhada com a arte, basta usar escala 1 e deslocamento 0
-        colisaoImg = Image.open(self.caminhoColisao).convert('RGB')
-        colisaoImg = colisaoImg.resize((round(colisaoImg.width * colisaoEscalaX), colisaoImg.height), Image.NEAREST)
-        alinhada = Image.new('RGB', (self.largura, self.altura), (255, 255, 255))
-        alinhada.paste(colisaoImg, (0, colisaoDeslocY))
+        # a imagem de colisão tem o mesmo tamanho da arte; ela é esticada (sem suavizar)
+        # para o tamanho do mundo, então continua encaixada na arte em qualquer escala
+        alinhada = Image.open(self.caminhoColisao).convert('RGB')
+        alinhada = alinhada.resize((self.largura, self.altura), Image.NEAREST)
 
         mapa = np.array(alinhada).astype(np.int16)
         mapa = mapa[::-1]                   # imagem tem y para baixo, o mundo tem y para cima
@@ -36,16 +90,39 @@ class FaseObject:
         preto = (r < 64) & (g < 64) & (b < 64)
         vermelho = (r > 192) & (g < 64) & (b < 64)
 
-        self.mortal = vermelho
-        # por enquanto o vermelho também é chão; a regra de morrer entra depois
-        self.solido = preto | vermelho
+        azul = mascaraCor(r, g, b, COR_BLOCO_MURO)
+        verde = mascaraCor(r, g, b, COR_BLOCO_INTERROGACAO)
+        amarelo = mascaraCor(r, g, b, COR_CHEGADA)
 
-        # imagem da colisão para o modo debug (tecla C): preto e vermelho semi-transparentes
+        self.mortal = vermelho
+        # o vermelho é sólido (o Lula não atravessa), mas encostar nele mata
+        self.solido = preto | vermelho
+        # encostar no amarelo termina a fase (não é sólido, o Lula entra nele)
+        self.chegada = amarelo
+
+        # ---- entidades: blocos ----
+        # o mapa já está com y para cima, então a linha da máscara é o y do mundo
+        # as regiões ficam guardadas para recriar os blocos quando a fase reinicia
+        self.regioesBlocos = {'muro': regioes(azul), 'interrogacao': regioes(verde)}
+        self.criarBlocos()
+
+        # imagem da colisão para o modo debug (tecla C): semi-transparente por cima da arte
         debug = np.zeros((self.altura, self.largura, 4), dtype=np.uint8)
         debug[preto] = (0, 0, 0, 255)
         debug[vermelho] = (255, 0, 0, 255)
+        debug[amarelo] = (255, 237, 0, 255)
+        # os blocos não entram nesta imagem fixa: como podem quebrar, são desenhados um a um no debug
         self.imagemDebug = Image.fromarray(debug[::-1], 'RGBA')
         self.mostrarColisao = False
+
+        # ---- arte sem os blocos ----
+        # a arte já tem os tijolos pintados; eles são apagados dela (cada linha é preenchida
+        # misturando as cores à esquerda e à direita) para que, quando a entidade quebrar,
+        # apareça o fundo atrás e não o desenho do bloco
+        self.imagemArte = self.apagarBlocosDaArte(arte.convert('RGBA'))
+
+        # pedaços voando quando um bloco quebra
+        self.particulas = ParticulasObject()
 
         # ---- quad da fase, ocupando o mundo todo (0,0) até (largura, altura) ----
         self.vertices = np.array([
@@ -70,13 +147,37 @@ class FaseObject:
         self.ebo = 0
         self.texId = 0
         self.texDebugId = 0
+        self.texDebugBlocos = {}
+
+    def apagarBlocosDaArte(self, arte, margem=2):
+        pixels = np.array(arte).astype(np.float32)
+        alturaImg, larguraImg = pixels.shape[:2]
+        for retangulos in self.regioesBlocos.values():
+            for x, y, larg, alt in retangulos:
+                # mundo (y para cima, escalado) -> imagem da arte (y para baixo)
+                x0 = max(int(x / self.escala) - margem, 1)
+                x1 = min(int((x + larg) / self.escala) + margem, larguraImg - 1)
+                topo = max(alturaImg - int((y + alt) / self.escala) - margem, 0)
+                baixo = min(alturaImg - int(y / self.escala) + margem, alturaImg)
+                esquerda = pixels[topo:baixo, x0 - 1]       # coluna logo antes do bloco
+                direita = pixels[topo:baixo, x1]            # coluna logo depois
+                t = np.linspace(0.0, 1.0, x1 - x0)[None, :, None]
+                pixels[topo:baixo, x0:x1] = esquerda[:, None] * (1 - t) + direita[:, None] * t
+        return Image.fromarray(pixels.round().astype(np.uint8), 'RGBA')
 
     def init(self):
         self.shader = Shader(os.path.join(PASTA_SHADERS, 'fase.vert'),
                              os.path.join(PASTA_SHADERS, 'fase.frag'))
 
-        self.texId = Texture(self.caminhoImagem).texId
+        self.texId = Texture(self.imagemArte).texId
         self.texDebugId = Texture(self.imagemDebug).texId
+        BlocoObject.carregarTexturas()
+        self.particulas.init()
+        # quadradinhos semi-transparentes para mostrar a colisão dos blocos no modo debug
+        self.texDebugBlocos = {
+            'muro': Texture(Image.new('RGBA', (1, 1), (*COR_BLOCO_MURO, 160))).texId,
+            'interrogacao': Texture(Image.new('RGBA', (1, 1), (*COR_BLOCO_INTERROGACAO, 160))).texId,
+        }
 
         self.vao = glGenVertexArrays(1)
         self.vbo = glGenBuffers(1)
@@ -105,7 +206,7 @@ class FaseObject:
 
         self.shader.usar()
         self.shader.setInt('uTextura', 0)
-        self.shader.setVec2('uTamanhoTextura', self.largura, self.altura)
+        self.shader.setVec2('uTamanhoTextura', self.larguraArte, self.alturaArte)
         self.shader.setFloat('uTamanhoBloco', self.tamanhoBloco)
         self.shader.setVec3('uNiveisCor', *self.niveisCor)
         glUseProgram(0)
@@ -121,13 +222,51 @@ class FaseObject:
         return bool(mapa[y0:y1, x0:x1].any())
 
     def colideSolido(self, x0, y0, x1, y1):
-        return self.areaColide(self.solido, x0, y0, x1, y1)
+        if self.areaColide(self.solido, x0, y0, x1, y1):
+            return True
+        return any(bloco.colide(x0, y0, x1, y1) for bloco in self.blocos)
+
+    def colideChegada(self, x0, y0, x1, y1):
+        return self.areaColide(self.chegada, x0, y0, x1, y1)
+
+    def drawBlocos(self, sprites, projecao):
+        sprites.comecar(projecao)
+        for bloco in self.blocos:
+            bloco.draw(sprites)
+        sprites.terminar()
 
     def colideMortal(self, x0, y0, x1, y1):
-        # ainda não é usado: fica pronto para a regra de morte
         return self.areaColide(self.mortal, x0, y0, x1, y1)
 
-    def draw(self, projecao):
+    def criarBlocos(self):
+        self.blocos = []
+        for tipo, retangulos in self.regioesBlocos.items():
+            self.blocos += preencherComBlocos(tipo, retangulos)
+
+    def reiniciar(self):
+        # recria as entidades no estado inicial: os blocos quebrados voltam
+        self.criarBlocos()
+        self.particulas.limpar()
+
+    def baterCabeca(self, x0, y0, x1, y1):
+        # o Lula subiu e bateu a cabeça (topo da caixa = y1): quebra o bloco logo acima dele.
+        # se encostar em dois blocos ao mesmo tempo, quebra o que está mais em cima da cabeça
+        acima = [b for b in self.blocos
+                 if b.x < x1 and b.x + b.largura > x0 and -0.5 <= b.y - y1 <= 1.5]
+        if not acima:
+            return None
+        bloco = max(acima, key=lambda b: min(x1, b.x + b.largura) - max(x0, b.x))
+        self.quebrarBloco(bloco)
+        return bloco
+
+    def quebrarBloco(self, bloco):
+        self.blocos.remove(bloco)
+        self.particulas.explodir(bloco.x, bloco.y, bloco.largura, bloco.altura)
+
+    def atualizar(self):
+        self.particulas.atualizar()
+
+    def draw(self, projecao, sprites):
         self.shader.usar()
         self.shader.setMat4('uProjecao', projecao)
 
@@ -140,12 +279,25 @@ class FaseObject:
         glBindTexture(GL_TEXTURE_2D, self.texId)
         glDrawElements(GL_TRIANGLES, len(self.faces), GL_UNSIGNED_INT, None)
 
-        # 2. modo debug: colisão desenhada por cima, meio transparente
+        # 2. entidades bloco por cima da arte, e os pedaços dos que quebraram
+        self.drawBlocos(sprites, projecao)
+        self.particulas.draw(sprites, projecao)
+
+        # 3. modo debug: colisão desenhada por cima de tudo, meio transparente
         if self.mostrarColisao:
+            self.shader.usar()
+            glActiveTexture(GL_TEXTURE0)
+            glBindVertexArray(self.vao)
             self.shader.setInt('uEstilo16bits', 0)
             self.shader.setFloat('uOpacidade', 0.5)
             glBindTexture(GL_TEXTURE_2D, self.texDebugId)
             glDrawElements(GL_TRIANGLES, len(self.faces), GL_UNSIGNED_INT, None)
+
+            # blocos que ainda existem
+            sprites.comecar(projecao)
+            for bloco in self.blocos:
+                sprites.desenhar(self.texDebugBlocos[bloco.tipo], bloco.x, bloco.y, bloco.largura, bloco.altura)
+            sprites.terminar()
 
         glBindVertexArray(0)
         glBindTexture(GL_TEXTURE_2D, 0)
@@ -154,5 +306,7 @@ class FaseObject:
     def delete(self):
         glDeleteVertexArrays(1, [self.vao])
         glDeleteBuffers(2, [self.vbo, self.ebo])
-        glDeleteTextures([self.texId, self.texDebugId])
+        glDeleteTextures([self.texId, self.texDebugId, *self.texDebugBlocos.values()])
+        BlocoObject.deletarTexturas()
+        self.particulas.delete()
         self.shader.delete()

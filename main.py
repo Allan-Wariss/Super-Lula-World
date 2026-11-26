@@ -5,10 +5,18 @@ from lulaObject import *
 from faseObject import *
 from camera import *
 from texture import *
+from spriteRenderer import SpriteRenderer
+from textoObject import TextoObject
 
-fase = FaseObject()
-lula = LulaObject()
-camera = Camera(alturaVisivel=fase.altura)   # a tela mostra a fase inteira na vertical
+fase = FaseObject(escala=1)                  # tamanho original da arte (a colisão acompanha a escala)
+# posição inicial do Lula acompanha a escala da fase; o tamanho dele não muda
+lula = LulaObject(x=60.0 * fase.escala, y=200.0 * fase.escala)
+
+ZOOM = 1.5                                   # câmera 1.5x mais perto que antes (antes mostrava 512 px de altura)
+camera = Camera(alturaVisivel=fase.alturaArte / ZOOM)
+
+sprites = SpriteRenderer()                   # desenha blocos e texto
+mensagemFase = TextoObject('Passou de fase!')
 
 velocidade = 2.5    # pixels do mundo por update
 tecla_c_anterior = False
@@ -20,8 +28,15 @@ def init():
     glEnable(GL_BLEND)
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
 
+    sprites.init()
+    mensagemFase.init()
     fase.init()                         # shader, VAO/VBO e textura da fase
     lula.init()                         # cria shader, VAO, VBO e carrega os sprites
+
+def reiniciarFase():
+    fase.reiniciar()
+    lula.reiniciar()
+    mensagemFase.visivel = False
 
 def update(window):
     global tecla_c_anterior
@@ -32,8 +47,19 @@ def update(window):
         fase.mostrarColisao = not fase.mostrarColisao
     tecla_c_anterior = tecla_c
 
+    # vida chegou a 0 -> a fase inteira reinicia do começo
+    if lula.morto():
+        reiniciarFase()
+
+    # encostou na parte amarela -> passou de fase (a transição para a próxima fase entra depois)
+    if not mensagemFase.visivel and fase.colideChegada(*lula.hitbox(lula.x, lula.y)):
+        mensagemFase.visivel = True
+
+    # partículas dos blocos quebrados
+    fase.atualizar()
+
     # a fase fica parada, quem se move é a câmera atrás do Lula
-    camera.seguir(lula.x, fase.largura)
+    camera.seguir(lula.x, lula.y, fase.largura, fase.altura)
 
 def render(window):
     larg, alt = glfw.get_framebuffer_size(window)
@@ -45,8 +71,9 @@ def render(window):
     glClear(GL_COLOR_BUFFER_BIT)
 
     projecao = camera.matrizProjecao()
-    fase.draw(projecao)
+    fase.draw(projecao, sprites)        # arte + blocos (+ colisão no modo debug)
     lula.draw(projecao)
+    mensagemFase.draw(sprites, larg, alt)   # por cima de tudo, em coordenadas da tela
 
 def main():
     glfw.init()
@@ -57,7 +84,6 @@ def main():
     glfw.window_hint(glfw.OPENGL_PROFILE, glfw.OPENGL_CORE_PROFILE)
     glfw.window_hint(glfw.OPENGL_FORWARD_COMPAT, True)
 
-    # altura = altura da fase -> 1 pixel da fase = 1 pixel da tela (sem borrar)
     window = glfw.create_window(1024, 512, 'Super Lula', None, None)
     glfw.make_context_current(window)
     glfw.swap_interval(1)
@@ -92,6 +118,8 @@ def main():
 
     lula.delete()
     fase.delete()
+    mensagemFase.delete()
+    sprites.delete()
     glfw.terminate()
 
 if __name__ == '__main__':

@@ -11,12 +11,17 @@ class Camera:
         # mantém a proporção da janela para não esticar os pixels
         self.larguraVisivel = self.alturaVisivel * larguraJanela / alturaJanela
 
-    def seguir(self, alvoX, larguraFase):
+    def seguir(self, alvoX, alvoY, larguraFase, alturaFase):
         # regra clássica de jogo 2D: a fase fica parada e a câmera centraliza no personagem,
         # sem passar das bordas da fase
         x = alvoX - self.larguraVisivel / 2
         x = max(0.0, min(x, larguraFase - self.larguraVisivel))
         self.x = round(x)                   # posição inteira evita tremer os pixels
+
+        # na vertical o personagem fica um pouco abaixo do centro (mostra mais o que está acima)
+        y = alvoY - self.alturaVisivel * 0.4
+        y = max(0.0, min(y, alturaFase - self.alturaVisivel))
+        self.y = round(y)
 
     def matrizProjecao(self):
         esq, dir = self.x, self.x + self.larguraVisivel

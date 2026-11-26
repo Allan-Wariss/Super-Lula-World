@@ -4,6 +4,7 @@ import ctypes
 import numpy as np
 from OpenGL.GL import *
 import glfw
+from PIL import Image
 from texture import Texture
 from shader import Shader
 
@@ -19,6 +20,10 @@ class LulaObject:
         self.inicioX = x
         self.inicioY = y
 
+        # vida: encostar no vermelho do mapa zera a vida na hora
+        self.vidaMax = 1
+        self.vida = self.vidaMax
+
         # física
         self.vy = 0.0
         self.gravidade = 0.5        # pixels por update²
@@ -32,21 +37,24 @@ class LulaObject:
         self.contadorCoyote = 0
         self.puloPressionadoAntes = False
 
-        # sprites têm 192x320 px, então a largura é 0.6 da altura
+        # sprites de caminhada têm 192x320 px, então a largura é 0.6 da altura
         alt = 50.0
-        meiaLarg = alt * 0.6 / 2
 
         # caixa de colisão menor que o desenho (o PNG tem bordas transparentes)
         self.hitMeiaLarg = 9.0
         self.hitAlt = 46.0
 
-        # cada vértice: [x, y, u, v] -> tudo intercalado num único VBO
-        self.vertices = np.array([
-            -meiaLarg, 0.0,  0.0, 0.0,
-             meiaLarg, 0.0,  1.0, 0.0,
-             meiaLarg, alt,  1.0, 1.0,
-            -meiaLarg, alt,  0.0, 1.0,
-        ], dtype=np.float32)
+        # sprites de pulo têm 1496x2048 px (proporção 0.73) e não têm borda transparente em cima,
+        # então ocupam só a altura do boneco (a caixa de colisão) para ficar do mesmo tamanho que andando
+        altPulo = self.hitAlt
+        self.resolucaoPulo = (70, 96)       # os PNGs de pulo são enormes: reduz antes de virar textura
+
+        # cada vértice: [x, y, u, v] -> tudo intercalado num único VBO.
+        # um quad por pose, porque andar e pular têm proporções diferentes
+        self.quads = {
+            'andar': self.criarQuad(alt * 0.6 / 2, alt),
+            'pulo': self.criarQuad(altPulo * 1496 / 2048 / 2, altPulo),
+        }
 
         self.faces = np.array([
             0, 1, 2,
@@ -62,53 +70,80 @@ class LulaObject:
 
         # só podem ser criados depois do contexto OpenGL existir -> init()
         self.shader = None
-        self.vao = 0
-        self.vbo = 0
-        self.ebo = 0
+        self.vaos = {}                  # pose -> VAO
+        self.buffers = []               # todos os VBOs/EBOs, para apagar no final
         self.texturas = {}
+
+    def criarQuad(self, meiaLarg, alt):
+        # quad com os pés no (0, 0), centralizado em x
+        return np.array([
+            -meiaLarg, 0.0,  0.0, 0.0,
+             meiaLarg, 0.0,  1.0, 0.0,
+             meiaLarg, alt,  1.0, 1.0,
+            -meiaLarg, alt,  0.0, 1.0,
+        ], dtype=np.float32)
 
     def init(self):
         self.shader = Shader(os.path.join(PASTA_SHADERS, 'lula.vert'),
                              os.path.join(PASTA_SHADERS, 'lula.frag'))
 
+        # texturas[pose][direção] -> lista de frames
         self.texturas = {
-            'direita': self.carregarSprites('walk_right'),
-            'esquerda': self.carregarSprites('walk_left'),
+            'andar': {
+                'direita': self.carregarSprites('walk_right'),
+                'esquerda': self.carregarSprites('walk_left'),
+            },
+            'pulo': {
+                'direita': self.carregarSprites('jump_right', self.resolucaoPulo),
+                'esquerda': self.carregarSprites('jump_left', self.resolucaoPulo),
+            },
         }
 
-        self.vao = glGenVertexArrays(1)     # VAO guarda toda a configuração dos atributos
-        self.vbo = glGenBuffers(1)          # VBO com posições + uvs
-        self.ebo = glGenBuffers(1)          # EBO com os índices das faces
+        for pose, vertices in self.quads.items():
+            self.vaos[pose] = self.enviarQuad(vertices)
 
-        glBindVertexArray(self.vao)
+        self.shader.usar()
+        self.shader.setInt('uTextura', 0)   # sampler lê da unidade de textura 0
+        glUseProgram(0)
 
-        glBindBuffer(GL_ARRAY_BUFFER, self.vbo)
-        glBufferData(GL_ARRAY_BUFFER, self.vertices.nbytes, self.vertices, GL_STATIC_DRAW)
+    def enviarQuad(self, vertices):
+        vao = glGenVertexArrays(1)          # VAO guarda toda a configuração dos atributos
+        vbo = glGenBuffers(1)               # VBO com posições + uvs
+        ebo = glGenBuffers(1)               # EBO com os índices das faces
+        self.buffers += [vbo, ebo]
 
-        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, self.ebo)
+        glBindVertexArray(vao)
+
+        glBindBuffer(GL_ARRAY_BUFFER, vbo)
+        glBufferData(GL_ARRAY_BUFFER, vertices.nbytes, vertices, GL_STATIC_DRAW)
+
+        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ebo)
         glBufferData(GL_ELEMENT_ARRAY_BUFFER, self.faces.nbytes, self.faces, GL_STATIC_DRAW)
 
-        stride = 4 * self.vertices.itemsize  # 4 floats por vértice
+        stride = 4 * vertices.itemsize      # 4 floats por vértice
 
         # location 0 -> aPosicao (x, y)
         glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, stride, ctypes.c_void_p(0))
         glEnableVertexAttribArray(0)
 
         # location 1 -> aUV (u, v), começa depois dos 2 floats da posição
-        glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, stride, ctypes.c_void_p(2 * self.vertices.itemsize))
+        glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, stride, ctypes.c_void_p(2 * vertices.itemsize))
         glEnableVertexAttribArray(1)
 
         glBindVertexArray(0)                # o EBO fica gravado no VAO, então desativa o VAO primeiro
         glBindBuffer(GL_ARRAY_BUFFER, 0)
+        return vao
 
-        self.shader.usar()
-        self.shader.setInt('uTextura', 0)   # sampler lê da unidade de textura 0
-        glUseProgram(0)
-
-    def carregarSprites(self, pasta):
+    def carregarSprites(self, pasta, resolucao=None):
         caminho = os.path.join(PASTA_SPRITES, pasta)
         arquivos = sorted(f for f in os.listdir(caminho) if f.endswith('.png'))
-        return [Texture(os.path.join(caminho, f)).texId for f in arquivos]
+        texIds = []
+        for f in arquivos:
+            img = Image.open(os.path.join(caminho, f)).convert('RGBA')
+            if resolucao:
+                img = img.resize(resolucao, Image.LANCZOS)
+            texIds.append(Texture(img).texId)
+        return texIds
 
     def mover(self, window, fase, velocidade=2.5):
         esquerda = glfw.get_key(window, glfw.KEY_A) == glfw.PRESS or glfw.get_key(window, glfw.KEY_LEFT) == glfw.PRESS
@@ -148,19 +183,44 @@ class LulaObject:
         # 3. eixo Y: gravidade puxa para baixo até encostar no chão (ou bater a cabeça)
         self.vy = max(self.vy - self.gravidade, -self.velQuedaMax)
         bateu = self.moverEixo(fase, 0.0, self.vy)
+        if bateu and self.vy > 0:
+            # bateu a cabeça subindo: se for um bloco, ele quebra
+            fase.baterCabeca(*self.hitbox(self.x, self.y))
         if bateu:
             self.noChao = self.vy < 0
             self.vy = 0.0
         else:
             self.noChao = False
 
-        # caiu para fora da fase -> volta para o início
-        if self.y < -100:
-            self.x, self.y, self.vy = self.inicioX, self.inicioY, 0.0
+        # encostou no vermelho (caixa de colisão com 1 pixel de folga, para contar
+        # também quando está só pisando ou encostado do lado) -> morre
+        x0, y0, x1, y1 = self.hitbox(self.x, self.y)
+        if fase.colideMortal(x0 - 1, y0 - 1, x1 + 1, y1 + 1):
+            self.vida = 0
 
-        # só anima a caminhada com os pés no chão (sem sprite de pulo por enquanto)
+        # caiu para fora da fase -> também morre
+        if self.y < -100:
+            self.vida = 0
+
+        # só anima a caminhada com os pés no chão
         self.andando = dx != 0.0 and self.noChao
         self.animar()
+
+    def morto(self):
+        return self.vida <= 0
+
+    def reiniciar(self):
+        # volta ao estado do começo da fase
+        self.x, self.y = self.inicioX, self.inicioY
+        self.vy = 0.0
+        self.noChao = False
+        self.contadorCoyote = 0
+        self.puloPressionadoAntes = False
+        self.direcao = 'direita'
+        self.andando = False
+        self.frameAtual = 0
+        self.contadorFrames = 0
+        self.vida = self.vidaMax
 
     def hitbox(self, x, y):
         return (x - self.hitMeiaLarg, y, x + self.hitMeiaLarg, y + self.hitAlt)
@@ -208,7 +268,12 @@ class LulaObject:
         self.contadorFrames += 1
         if self.contadorFrames >= self.ticksPorFrame:
             self.contadorFrames = 0
-            self.frameAtual = (self.frameAtual + 1) % len(self.texturas[self.direcao])
+            self.frameAtual = (self.frameAtual + 1) % len(self.texturas['andar'][self.direcao])
+
+    def poseAtual(self):
+        # no ar (pulando ou caindo) usa o sprite de pulo; a direção é sempre a última tecla apertada,
+        # então virar no meio do pulo troca o sprite para o outro lado na hora
+        return 'andar' if self.noChao else 'pulo'
 
     def draw(self, projecao):
         self.shader.usar()
@@ -216,10 +281,14 @@ class LulaObject:
         # posição arredondada para o sprite cair certinho na grade de pixels
         self.shader.setVec2('uDeslocamento', round(self.x), round(self.y))
 
-        glActiveTexture(GL_TEXTURE0)
-        glBindTexture(GL_TEXTURE_2D, self.texturas[self.direcao][self.frameAtual])
+        pose = self.poseAtual()
+        frames = self.texturas[pose][self.direcao]
+        frame = self.frameAtual if pose == 'andar' else 0
 
-        glBindVertexArray(self.vao)
+        glActiveTexture(GL_TEXTURE0)
+        glBindTexture(GL_TEXTURE_2D, frames[frame % len(frames)])
+
+        glBindVertexArray(self.vaos[pose])
         glDrawElements(GL_TRIANGLES, len(self.faces), GL_UNSIGNED_INT, None)
         glBindVertexArray(0)
 
@@ -227,8 +296,9 @@ class LulaObject:
         glUseProgram(0)
 
     def delete(self):
-        glDeleteVertexArrays(1, [self.vao])
-        glDeleteBuffers(2, [self.vbo, self.ebo])
-        for texIds in self.texturas.values():
-            glDeleteTextures(texIds)
+        glDeleteVertexArrays(len(self.vaos), list(self.vaos.values()))
+        glDeleteBuffers(len(self.buffers), self.buffers)
+        for porDirecao in self.texturas.values():
+            for texIds in porDirecao.values():
+                glDeleteTextures(texIds)
         self.shader.delete()
