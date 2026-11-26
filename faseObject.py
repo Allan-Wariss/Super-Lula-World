@@ -7,6 +7,7 @@ from texture import Texture
 from shader import Shader
 from blocoObject import BlocoObject
 from particulasObject import ParticulasObject
+from inimigoObject import InimigoObject, retangulosEncostam
 
 PASTA_BASE = os.path.dirname(os.path.abspath(__file__))
 PASTA_FASE = os.path.join(PASTA_BASE, 'textures', 'fase')
@@ -16,6 +17,7 @@ PASTA_SHADERS = os.path.join(PASTA_BASE, 'shaders')
 COR_BLOCO_MURO = (0x00, 0x4a, 0xad)     # azul  -> blocos de muro
 COR_BLOCO_INTERROGACAO = (97, 193, 41)  # verde -> blocos [?]
 COR_CHEGADA = (255, 237, 0)             # amarelo -> fim da fase
+COR_INIMIGO = (255, 0, 252)             # rosa -> onde nasce um inimigo
 
 def mascaraCor(r, g, b, cor, tolerancia=48):
     return (np.abs(r - cor[0]) < tolerancia) & (np.abs(g - cor[1]) < tolerancia) & (np.abs(b - cor[2]) < tolerancia)
@@ -92,6 +94,7 @@ class FaseObject:
 
         azul = mascaraCor(r, g, b, COR_BLOCO_MURO)
         verde = mascaraCor(r, g, b, COR_BLOCO_INTERROGACAO)
+        rosa = mascaraCor(r, g, b, COR_INIMIGO)
         amarelo = mascaraCor(r, g, b, COR_CHEGADA)
 
         self.mortal = vermelho
@@ -105,6 +108,11 @@ class FaseObject:
         # as regiões ficam guardadas para recriar os blocos quando a fase reinicia
         self.regioesBlocos = {'muro': regioes(azul), 'interrogacao': regioes(verde)}
         self.criarBlocos()
+
+        # ---- entidades: inimigos ----
+        # cada marca rosa é o lugar (e o tamanho) onde um inimigo nasce
+        self.regioesInimigos = regioes(rosa)
+        self.criarInimigos()
 
         # imagem da colisão para o modo debug (tecla C): semi-transparente por cima da arte
         debug = np.zeros((self.altura, self.largura, 4), dtype=np.uint8)
@@ -173,6 +181,7 @@ class FaseObject:
         self.texDebugId = Texture(self.imagemDebug).texId
         BlocoObject.carregarTexturas()
         self.particulas.init()
+        InimigoObject.carregarTextura()
         # quadradinhos semi-transparentes para mostrar a colisão dos blocos no modo debug
         self.texDebugBlocos = {
             'muro': Texture(Image.new('RGBA', (1, 1), (*COR_BLOCO_MURO, 160))).texId,
@@ -243,30 +252,61 @@ class FaseObject:
         for tipo, retangulos in self.regioesBlocos.items():
             self.blocos += preencherComBlocos(tipo, retangulos)
 
+    def criarInimigos(self):
+        self.inimigos = [InimigoObject(x, y, larg, alt) for x, y, larg, alt in self.regioesInimigos]
+
     def reiniciar(self):
-        # recria as entidades no estado inicial: os blocos quebrados voltam
+        # recria as entidades no estado inicial: os blocos quebrados e os inimigos mortos voltam
         self.criarBlocos()
+        self.criarInimigos()
         self.particulas.limpar()
 
     def baterCabeca(self, x0, y0, x1, y1):
-        # o Lula subiu e bateu a cabeça (topo da caixa = y1): quebra o bloco logo acima dele.
-        # se encostar em dois blocos ao mesmo tempo, quebra o que está mais em cima da cabeça
+        # o Lula subiu e bateu a cabeça (topo da caixa = y1): acerta o bloco logo acima dele.
+        # se encostar em dois blocos ao mesmo tempo, acerta o que está mais em cima da cabeça.
+        # bloco quebrável some; o bloco [?] não quebra, só passa de fechado para aberto
         acima = [b for b in self.blocos
                  if b.x < x1 and b.x + b.largura > x0 and -0.5 <= b.y - y1 <= 1.5]
         if not acima:
             return None
         bloco = max(acima, key=lambda b: min(x1, b.x + b.largura) - max(x0, b.x))
-        self.quebrarBloco(bloco)
+        if bloco.quebravel():
+            self.quebrarBloco(bloco)
+        else:
+            bloco.abrir()
         return bloco
 
     def quebrarBloco(self, bloco):
         self.blocos.remove(bloco)
         self.particulas.explodir(bloco.x, bloco.y, bloco.largura, bloco.altura)
 
-    def atualizar(self):
+    def atualizar(self, lula):
         self.particulas.atualizar()
+        for inimigo in self.inimigos:
+            inimigo.atualizar(self, lula, self.inimigos)
+        self.verificarInimigos(lula)
+        self.inimigos = [i for i in self.inimigos if not i.removivel()]
 
-    def draw(self, projecao, sprites):
+    def verificarInimigos(self, lula):
+        # contato do Lula com os inimigos:
+        # - caindo e com os pés acima do topo do inimigo no update anterior -> pisoteou, inimigo morre
+        # - qualquer outro contato (pelos lados ou por baixo) -> Lula leva 1 de dano
+        x0, y0, x1, y1 = lula.hitbox(lula.x, lula.y)
+        # 1 pixel de folga dos lados, para contar também quando só estão encostados
+        caixa = (x0 - 1, y0 - 1, x1 + 1, y1)
+        pisou = False
+        for inimigo in self.inimigos:
+            if not inimigo.vivo or not retangulosEncostam(caixa, inimigo.retangulo()):
+                continue
+            if lula.vy <= 0 and lula.yAnterior >= inimigo.topo() - 1:
+                inimigo.pisoteado()
+                pisou = True
+            elif not pisou:
+                lula.levarDano(1)
+        if pisou:
+            lula.quicar()
+
+    def draw(self, projecao, sprites, alfa=1.0, alinhar=round):
         self.shader.usar()
         self.shader.setMat4('uProjecao', projecao)
 
@@ -282,6 +322,12 @@ class FaseObject:
         # 2. entidades bloco por cima da arte, e os pedaços dos que quebraram
         self.drawBlocos(sprites, projecao)
         self.particulas.draw(sprites, projecao)
+
+        # inimigos (sem sprite ainda: blocos rosa)
+        sprites.comecar(projecao)
+        for inimigo in self.inimigos:
+            inimigo.draw(sprites, alfa, alinhar)
+        sprites.terminar()
 
         # 3. modo debug: colisão desenhada por cima de tudo, meio transparente
         if self.mostrarColisao:
@@ -309,4 +355,5 @@ class FaseObject:
         glDeleteTextures([self.texId, self.texDebugId, *self.texDebugBlocos.values()])
         BlocoObject.deletarTexturas()
         self.particulas.delete()
+        InimigoObject.deletarTextura()
         self.shader.delete()

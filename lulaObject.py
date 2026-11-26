@@ -23,6 +23,11 @@ class LulaObject:
         # vida: encostar no vermelho do mapa zera a vida na hora
         self.vidaMax = 1
         self.vida = self.vidaMax
+        self.tempoInvencivel = 90   # updates sem levar dano depois de apanhar (1,5 s)
+        self.contadorInvencivel = 0
+        self.forcaQuique = 8.0      # impulso para cima ao pisar num inimigo
+        self.yAnterior = y          # altura no update anterior (para saber se pisou em cima)
+        self.xAnterior = x          # posição no update anterior (para desenhar suave entre updates)
 
         # física
         self.vy = 0.0
@@ -146,6 +151,11 @@ class LulaObject:
         return texIds
 
     def mover(self, window, fase, velocidade=2.5):
+        self.xAnterior = self.x
+        self.yAnterior = self.y
+        if self.contadorInvencivel > 0:
+            self.contadorInvencivel -= 1
+
         esquerda = glfw.get_key(window, glfw.KEY_A) == glfw.PRESS or glfw.get_key(window, glfw.KEY_LEFT) == glfw.PRESS
         direita = glfw.get_key(window, glfw.KEY_D) == glfw.PRESS or glfw.get_key(window, glfw.KEY_RIGHT) == glfw.PRESS
 
@@ -209,6 +219,18 @@ class LulaObject:
     def morto(self):
         return self.vida <= 0
 
+    def levarDano(self, dano):
+        # depois de apanhar fica invencível um tempo (piscando), para não perder várias vidas de uma vez
+        if self.contadorInvencivel > 0 or self.morto():
+            return
+        self.vida = max(0, self.vida - dano)
+        self.contadorInvencivel = self.tempoInvencivel
+
+    def quicar(self):
+        # pisou num inimigo: pula de novo (segurando o pulo vai mais alto, igual ao pulo normal)
+        self.vy = self.forcaQuique
+        self.noChao = False
+
     def reiniciar(self):
         # volta ao estado do começo da fase
         self.x, self.y = self.inicioX, self.inicioY
@@ -221,6 +243,15 @@ class LulaObject:
         self.frameAtual = 0
         self.contadorFrames = 0
         self.vida = self.vidaMax
+        self.contadorInvencivel = 0
+        self.xAnterior = self.x
+        self.yAnterior = self.y
+
+    def posicaoDesenho(self, alfa):
+        # a lógica roda a 60 updates/s, mas a tela pode desenhar mais quadros (ex.: monitor de 144 Hz).
+        # entre dois updates, desenha o Lula no meio do caminho entre a posição anterior e a atual
+        return (self.xAnterior + (self.x - self.xAnterior) * alfa,
+                self.yAnterior + (self.y - self.yAnterior) * alfa)
 
     def hitbox(self, x, y):
         return (x - self.hitMeiaLarg, y, x + self.hitMeiaLarg, y + self.hitAlt)
@@ -275,11 +306,15 @@ class LulaObject:
         # então virar no meio do pulo troca o sprite para o outro lado na hora
         return 'andar' if self.noChao else 'pulo'
 
-    def draw(self, projecao):
+    def draw(self, projecao, alfa, alinhar):
+        # invencível depois de levar dano: pisca (some 4 updates a cada 8)
+        if self.contadorInvencivel > 0 and (self.contadorInvencivel // 4) % 2 == 1:
+            return
         self.shader.usar()
         self.shader.setMat4('uProjecao', projecao)
-        # posição arredondada para o sprite cair certinho na grade de pixels
-        self.shader.setVec2('uDeslocamento', round(self.x), round(self.y))
+        # posição suavizada entre updates e alinhada na grade de pixels da tela
+        x, y = self.posicaoDesenho(alfa)
+        self.shader.setVec2('uDeslocamento', alinhar(x), alinhar(y))
 
         pose = self.poseAtual()
         frames = self.texturas[pose][self.direcao]

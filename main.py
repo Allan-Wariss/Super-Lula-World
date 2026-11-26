@@ -47,6 +47,9 @@ def update(window):
         fase.mostrarColisao = not fase.mostrarColisao
     tecla_c_anterior = tecla_c
 
+    # inimigos andando, contato com o Lula e partículas dos blocos quebrados
+    fase.atualizar(lula)
+
     # vida chegou a 0 -> a fase inteira reinicia do começo
     if lula.morto():
         reiniciarFase()
@@ -55,24 +58,25 @@ def update(window):
     if not mensagemFase.visivel and fase.colideChegada(*lula.hitbox(lula.x, lula.y)):
         mensagemFase.visivel = True
 
-    # partículas dos blocos quebrados
-    fase.atualizar()
 
-    # a fase fica parada, quem se move é a câmera atrás do Lula
-    camera.seguir(lula.x, lula.y, fase.largura, fase.altura)
-
-def render(window):
+def render(window, alfa):
+    # alfa: quanto já passou do próximo update (0 a 1), para desenhar entre o estado anterior e o atual
     larg, alt = glfw.get_framebuffer_size(window)
     if larg == 0 or alt == 0:           # janela minimizada
         return
     glViewport(0, 0, larg, alt)
     camera.ajustarTela(larg, alt)
 
+    # a fase fica parada, quem se move é a câmera atrás do Lula
+    # (segue a posição suavizada e alinhada, a mesma usada para desenhar o Lula -> ele não treme)
+    lx, ly = lula.posicaoDesenho(alfa)
+    camera.seguir(camera.alinhar(lx), camera.alinhar(ly), fase.largura, fase.altura)
+
     glClear(GL_COLOR_BUFFER_BIT)
 
     projecao = camera.matrizProjecao()
-    fase.draw(projecao, sprites)        # arte + blocos (+ colisão no modo debug)
-    lula.draw(projecao)
+    fase.draw(projecao, sprites, alfa, camera.alinhar)  # arte + blocos + inimigos (+ colisão no debug)
+    lula.draw(projecao, alfa, camera.alinhar)
     mensagemFase.draw(sprites, larg, alt)   # por cima de tudo, em coordenadas da tela
 
 def main():
@@ -113,7 +117,7 @@ def main():
 
             acumulador -= TEMPO_POR_ATUALIZACAO
 
-        render(window)
+        render(window, acumulador / TEMPO_POR_ATUALIZACAO)
         glfw.swap_buffers(window)
 
     lula.delete()
