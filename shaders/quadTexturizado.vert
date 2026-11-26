@@ -1,5 +1,8 @@
 #version 330 core
 
+// Quad texturizado: desenha uma textura num retângulo (posição + tamanho por uniform).
+// Usado pelo SpriteRenderer para blocos, inimigos, partículas e o texto da tela.
+
 // quad unitário: posição de (0,0) até (1,1)
 layout (location = 0) in vec2 aPosicao;
 layout (location = 1) in vec2 aUV;

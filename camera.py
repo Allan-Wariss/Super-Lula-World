@@ -19,12 +19,21 @@ class Camera:
         # faz o personagem e a câmera "pularem" meio pixel um em relação ao outro
         return round(valor * self.escalaTela) / self.escalaTela
 
+    def xParaAlvo(self, alvoX, larguraFase):
+        # canto esquerdo da câmera com o alvo no centro, sem passar das bordas da fase
+        x = alvoX - self.larguraVisivel / 2
+        return max(0.0, min(x, larguraFase - self.larguraVisivel))
+
+    def areaVisivelX(self, alvoX, larguraFase):
+        # trecho horizontal do mundo que a câmera mostra quando segue este alvo (esquerda, direita).
+        # usado na lógica do jogo (spawn dos inimigos), que roda separada do desenho
+        x = self.xParaAlvo(alvoX, larguraFase)
+        return x, x + self.larguraVisivel
+
     def seguir(self, alvoX, alvoY, larguraFase, alturaFase):
         # regra clássica de jogo 2D: a fase fica parada e a câmera centraliza no personagem,
         # sem passar das bordas da fase
-        x = alvoX - self.larguraVisivel / 2
-        x = max(0.0, min(x, larguraFase - self.larguraVisivel))
-        self.x = self.alinhar(x)            # alinhado na grade da tela evita tremer os pixels
+        self.x = self.alinhar(self.xParaAlvo(alvoX, larguraFase))            # alinhado na grade da tela evita tremer os pixels
 
         # na vertical o personagem fica um pouco abaixo do centro (mostra mais o que está acima)
         y = alvoY - self.alturaVisivel * 0.4

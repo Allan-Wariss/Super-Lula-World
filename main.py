@@ -33,10 +33,16 @@ def init():
     fase.init()                         # shader, VAO/VBO e textura da fase
     lula.init()                         # cria shader, VAO, VBO e carrega os sprites
 
+def areaVisivel():
+    # o que a câmera mostra seguindo o Lula agora (calculado direto da posição dele,
+    # então funciona igual mesmo logo depois de reiniciar, antes do próximo desenho)
+    return camera.areaVisivelX(lula.x, fase.largura)
+
 def reiniciarFase():
     fase.reiniciar()
     lula.reiniciar()
     mensagemFase.visivel = False
+    fase.ativarInimigos(areaVisivel())  # os que já estão na tela do começo fazem parte da cena inicial
 
 def update(window):
     global tecla_c_anterior
@@ -48,7 +54,7 @@ def update(window):
     tecla_c_anterior = tecla_c
 
     # inimigos andando, contato com o Lula e partículas dos blocos quebrados
-    fase.atualizar(lula)
+    fase.atualizar(lula, areaVisivel())
 
     # vida chegou a 0 -> a fase inteira reinicia do começo
     if lula.morto():
@@ -92,7 +98,10 @@ def main():
     glfw.make_context_current(window)
     glfw.swap_interval(1)
 
+    # a câmera precisa saber o tamanho da janela antes do primeiro update (spawn dos inimigos)
+    camera.ajustarTela(*glfw.get_framebuffer_size(window))
     init()
+    fase.ativarInimigos(areaVisivel())
 
     FPS_ALVO = 60.0
     TEMPO_POR_ATUALIZACAO = 1.0 / FPS_ALVO

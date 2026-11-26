@@ -29,8 +29,9 @@ class SpriteRenderer:
         self.ebo = 0
 
     def init(self):
-        self.shader = Shader(os.path.join(PASTA_SHADERS, 'sprite.vert'),
-                             os.path.join(PASTA_SHADERS, 'sprite.frag'))
+        # shader de "quad texturizado": um retângulo com uma textura, posição e tamanho via uniforms
+        self.shader = Shader(os.path.join(PASTA_SHADERS, 'quadTexturizado.vert'),
+                             os.path.join(PASTA_SHADERS, 'quadTexturizado.frag'))
 
         self.vao = glGenVertexArrays(1)
         self.vbo = glGenBuffers(1)

@@ -1,5 +1,8 @@
 #version 330 core
 
+// Quad texturizado: pinta o retângulo com a textura, respeitando a transparência do PNG.
+// Par do quadTexturizado.vert (blocos, inimigos, partículas e texto).
+
 in vec2 vUV;
 
 uniform sampler2D uTextura;

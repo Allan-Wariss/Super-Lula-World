@@ -280,8 +280,15 @@ class FaseObject:
         self.blocos.remove(bloco)
         self.particulas.explodir(bloco.x, bloco.y, bloco.largura, bloco.altura)
 
-    def atualizar(self, lula):
+    def ativarInimigos(self, areaVisivel):
+        # inimigos que ainda esperam no ponto de spawn surgem quando a câmera chega perto deles
+        for inimigo in self.inimigos:
+            if not inimigo.ativo and inimigo.pertoDaTela(areaVisivel):
+                inimigo.ativar()
+
+    def atualizar(self, lula, areaVisivel):
         self.particulas.atualizar()
+        self.ativarInimigos(areaVisivel)
         for inimigo in self.inimigos:
             inimigo.atualizar(self, lula, self.inimigos)
         self.verificarInimigos(lula)
@@ -296,7 +303,7 @@ class FaseObject:
         caixa = (x0 - 1, y0 - 1, x1 + 1, y1)
         pisou = False
         for inimigo in self.inimigos:
-            if not inimigo.vivo or not retangulosEncostam(caixa, inimigo.retangulo()):
+            if not inimigo.ativo or not inimigo.vivo or not retangulosEncostam(caixa, inimigo.retangulo()):
                 continue
             if lula.vy <= 0 and lula.yAnterior >= inimigo.topo() - 1:
                 inimigo.pisoteado()
@@ -323,7 +330,7 @@ class FaseObject:
         self.drawBlocos(sprites, projecao)
         self.particulas.draw(sprites, projecao)
 
-        # inimigos (sem sprite ainda: blocos rosa)
+        # inimigos (os que ainda não surgiram não são desenhados)
         sprites.comecar(projecao)
         for inimigo in self.inimigos:
             inimigo.draw(sprites, alfa, alinhar)
