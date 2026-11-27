@@ -53,12 +53,15 @@ def update(window):
         fase.mostrarColisao = not fase.mostrarColisao
     tecla_c_anterior = tecla_c
 
+    # vida chegou a 0 -> o mundo congela enquanto roda a animação de morte do Lula,
+    # e só depois de 2 s a fase inteira reinicia do começo
+    if lula.morto():
+        if lula.terminouMorte():
+            reiniciarFase()
+        return
+
     # inimigos andando, contato com o Lula e partículas dos blocos quebrados
     fase.atualizar(lula, areaVisivel())
-
-    # vida chegou a 0 -> a fase inteira reinicia do começo
-    if lula.morto():
-        reiniciarFase()
 
     # encostou na parte amarela -> passou de fase (a transição para a próxima fase entra depois)
     if not mensagemFase.visivel and fase.colideChegada(*lula.hitbox(lula.x, lula.y)):
@@ -75,13 +78,17 @@ def render(window, alfa):
 
     # a fase fica parada, quem se move é a câmera atrás do Lula
     # (segue a posição suavizada e alinhada, a mesma usada para desenhar o Lula -> ele não treme)
-    lx, ly = lula.posicaoDesenho(alfa)
-    camera.seguir(camera.alinhar(lx), camera.alinhar(ly), fase.largura, fase.altura)
+    # morrendo: a câmera fica parada onde estava, para o Lula sair da tela
+    if not lula.morto():
+        lx, ly = lula.posicaoDesenho(alfa)
+        camera.seguir(camera.alinhar(lx), camera.alinhar(ly), fase.largura, fase.altura)
 
     glClear(GL_COLOR_BUFFER_BIT)
 
     projecao = camera.matrizProjecao()
-    fase.draw(projecao, sprites, alfa, camera.alinhar)  # arte + blocos + inimigos (+ colisão no debug)
+    # mundo congelado durante a morte: desenha no estado atual (sem interpolar, senão treme)
+    alfaMundo = 1.0 if lula.morto() else alfa
+    fase.draw(projecao, sprites, alfaMundo, camera.alinhar)  # arte + blocos + inimigos (+ colisão no debug)
     lula.draw(projecao, alfa, camera.alinhar)
     mensagemFase.draw(sprites, larg, alt)   # por cima de tudo, em coordenadas da tela
 

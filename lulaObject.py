@@ -38,6 +38,14 @@ class LulaObject:
         self.yAnterior = y          # altura no update anterior (para saber se pisou em cima)
         self.xAnterior = x          # posição no update anterior (para desenhar suave entre updates)
 
+        # animação de morte (igual ao Mario): fica parado um instante, dá um pulo para cima
+        # e cai para fora da tela atravessando tudo. depois de 2 s a fase reinicia
+        self.tempoMorte = 120       # updates entre morrer e reiniciar a fase (2 s)
+        self.pausaMorte = 30        # updates parado antes do pulo (0,5 s)
+        self.forcaPuloMorte = 10.0
+        self.contadorMorte = 0
+        self.morteNoBuraco = False  # caiu para fora da fase: não tem pulo, só espera
+
         # física
         self.vy = 0.0
         self.gravidade = 0.5        # pixels por update²
@@ -182,6 +190,10 @@ class LulaObject:
     def mover(self, window, fase, velocidade=2.5):
         self.xAnterior = self.x
         self.yAnterior = self.y
+        if self.morto():
+            # morto não obedece mais às teclas nem colide com nada: só a animação de morte
+            self.animarMorte()
+            return
         if self.contadorInvencivel > 0:
             self.contadorInvencivel -= 1
 
@@ -259,6 +271,29 @@ class LulaObject:
     def morto(self):
         return self.vida <= 0
 
+    def animarMorte(self):
+        if self.contadorMorte == 0:
+            # primeiro update morto: para tudo e fica de frente, no sprite de pulo
+            self.morteNoBuraco = self.y < 0
+            self.vy = 0.0
+            self.noChao = False
+            self.andando = False
+            self.contadorInvencivel = 0
+            self.contadorArremesso = 0
+        self.contadorMorte += 1
+        if self.morteNoBuraco:
+            return
+        if self.contadorMorte == self.pausaMorte:
+            self.vy = self.forcaPuloMorte
+        if self.contadorMorte >= self.pausaMorte:
+            # sobe e cai só com a gravidade, sem colisão (atravessa o chão e sai da tela)
+            self.vy = max(self.vy - self.gravidade, -self.velQuedaMax)
+            self.y += self.vy
+
+    def terminouMorte(self):
+        # já passou o tempo da animação de morte -> hora de reiniciar a fase
+        return self.morto() and self.contadorMorte >= self.tempoMorte
+
     def temPoder(self):
         # com 2 de vida o Lula está vermelho e pode jogar bolas de fogo
         return self.vida >= 2
@@ -301,6 +336,8 @@ class LulaObject:
         self.tiroPressionadoAntes = False
         self.xAnterior = self.x
         self.yAnterior = self.y
+        self.contadorMorte = 0
+        self.morteNoBuraco = False
 
     def posicaoDesenho(self, alfa):
         # a lógica roda a 60 updates/s, mas a tela pode desenhar mais quadros (ex.: monitor de 144 Hz).
