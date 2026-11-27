@@ -1,4 +1,6 @@
+import os
 import glfw
+from just_playback import Playback
 from OpenGL.GL import *
 from math import *
 from lulaObject import *
@@ -19,6 +21,11 @@ sprites = SpriteRenderer()                   # desenha blocos e texto
 mensagemFase = TextoObject('Passou de fase!')
 
 velocidade = 2.5    # pixels do mundo por update
+
+# música de fundo (just_playback: biblioteca só de tocar áudio)
+ARQUIVO_MUSICA = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'songs', 'BackGroundSong.mp3')
+VOLUME_MUSICA = 0.05    # bem baixo, só de fundo (0 a 1)
+musica = None
 tecla_c_anterior = False
 
 def init():
@@ -33,6 +40,28 @@ def init():
     fase.init()                         # shader, VAO/VBO e textura da fase
     lula.init()                         # cria shader, VAO, VBO e carrega os sprites
 
+def iniciarAudio():
+    global musica
+    try:
+        musica = Playback()
+        musica.load_file(ARQUIVO_MUSICA)
+        musica.set_volume(VOLUME_MUSICA)
+        musica.loop_at_end(True)        # ao chegar no fim, volta para o começo
+    except Exception as erro:           # sem placa de som / arquivo faltando: o jogo roda mudo
+        print('Sem áudio:', erro)
+        musica = None
+    tocarMusica()
+
+def tocarMusica():
+    # do começo (stop volta a posição para 0)
+    if musica:
+        musica.stop()
+        musica.play()
+
+def pararMusica():
+    if musica:
+        musica.stop()
+
 def areaVisivel():
     # o que a câmera mostra seguindo o Lula agora (calculado direto da posição dele,
     # então funciona igual mesmo logo depois de reiniciar, antes do próximo desenho)
@@ -43,6 +72,7 @@ def reiniciarFase():
     lula.reiniciar()
     mensagemFase.visivel = False
     fase.ativarInimigos(areaVisivel())  # os que já estão na tela do começo fazem parte da cena inicial
+    tocarMusica()                       # a música recomeça junto com a fase
 
 def update(window):
     global tecla_c_anterior
@@ -56,6 +86,8 @@ def update(window):
     # vida chegou a 0 -> o mundo congela enquanto roda a animação de morte do Lula,
     # e só depois de 2 s a fase inteira reinicia do começo
     if lula.morto():
+        if lula.contadorMorte == 1:     # primeiro update da animação de morte: a música para
+            pararMusica()
         if lula.terminouMorte():
             reiniciarFase()
         return
@@ -109,6 +141,7 @@ def main():
     camera.ajustarTela(*glfw.get_framebuffer_size(window))
     init()
     fase.ativarInimigos(areaVisivel())
+    iniciarAudio()
 
     FPS_ALVO = 60.0
     TEMPO_POR_ATUALIZACAO = 1.0 / FPS_ALVO
@@ -140,6 +173,7 @@ def main():
     fase.delete()
     mensagemFase.delete()
     sprites.delete()
+    pararMusica()
     glfw.terminate()
 
 if __name__ == '__main__':
