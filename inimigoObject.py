@@ -42,6 +42,7 @@ class InimigoObject:
         self.vy = 0.0
         self.gravidade = 0.5
         self.velQuedaMax = 10.0
+        self.noChao = False         # só evita beiradas quando está andando no chão
         self.vivo = True
         self.tempoEsmagado = 0      # depois de pisoteado fica achatado um tempinho e some
         self.xAnterior = self.x     # posição no update anterior (para desenhar suave entre updates)
@@ -95,24 +96,27 @@ class InimigoObject:
             return
 
         # 1. anda na horizontal, um pixel por vez; bateu em parede, bloco, jogador
-        #    ou outro inimigo -> vira para o lado oposto
+        #    ou outro inimigo -> vira para o lado oposto.
+        #    beirada: só cai se embaixo tiver chão normal; se for cair no vermelho ou num buraco, vira
         passos = math.ceil(self.velocidade)
         passo = self.velocidade / passos * self.direcao if passos else 0.0
         for _ in range(passos):
             proximo = self.retangulo(x=self.x + passo)
-            if self.bloqueado(proximo, fase, lula, outros):
+            if self.bloqueado(proximo, fase, lula, outros) or (self.noChao and self.beiradaPerigosa(proximo, fase)):
                 self.direcao = -self.direcao
                 break
             self.x += passo
 
-        # 2. gravidade: cai até encostar no chão (pode cair de beiradas)
+        # 2. gravidade: cai até encostar no chão (só cai de beiradas que dão em chão normal)
         self.vy = max(self.vy - self.gravidade, -self.velQuedaMax)
         passos = max(1, math.ceil(abs(self.vy)))
         passo = self.vy / passos
+        self.noChao = False
         for _ in range(passos):
             if fase.colideSolido(*self.retangulo(y=self.y + passo)):
                 if passo < 0:
                     self.y = math.floor(self.y)     # cola no chão
+                    self.noChao = True
                 self.vy = 0.0
                 break
             self.y += passo
@@ -137,6 +141,14 @@ class InimigoObject:
         if retangulosEncostam(ret, lula.hitbox(lula.x, lula.y)):
             return True
         return any(o is not self and o.ativo and o.vivo and retangulosEncostam(ret, o.retangulo()) for o in outros)
+
+    def beiradaPerigosa(self, ret, fase):
+        # na próxima posição não sobra chão nenhum embaixo dos pés -> ia cair.
+        # é perigosa se o que tem lá embaixo é o vermelho (morte) ou um buraco sem fundo
+        x0, y0, x1, _ = ret
+        if fase.colideSolido(x0, y0 - 1, x1, y0):
+            return False
+        return not fase.chaoSeguroAbaixo(x0, x1, y0)
 
     def queimado(self):
         # acertado por uma bola de fogo: some na hora (as partículas ficam por conta da fase)

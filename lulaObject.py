@@ -46,6 +46,10 @@ class LulaObject:
         self.contadorMorte = 0
         self.morteNoBuraco = False  # caiu para fora da fase: não tem pulo, só espera
 
+        # fim de fase: encostou no amarelo -> perde o controle e anda sozinho para a direita
+        # até sair da tela (a próxima fase só começa depois que ele some)
+        self.saindoDaFase = False
+
         # física
         self.vy = 0.0
         self.gravidade = 0.5        # pixels por update²
@@ -66,6 +70,7 @@ class LulaObject:
 
         # sprites de caminhada têm 192x320 px, então a largura é 0.6 da altura
         alt = 50.0
+        self.meiaLargDesenho = alt * 0.6 / 2    # metade da largura do desenho (para saber quando saiu da tela)
 
         # caixa de colisão menor que o desenho (o PNG tem bordas transparentes)
         self.hitMeiaLarg = 9.0
@@ -194,6 +199,10 @@ class LulaObject:
             # morto não obedece mais às teclas nem colide com nada: só a animação de morte
             self.animarMorte()
             return
+        if self.saindoDaFase:
+            # passou de fase: as teclas não fazem nada, ele anda sozinho até sair da tela
+            self.andarParaFora(fase, velocidade)
+            return
         if self.contadorInvencivel > 0:
             self.contadorInvencivel -= 1
 
@@ -268,6 +277,36 @@ class LulaObject:
         self.andando = dx != 0.0 and self.noChao
         self.animar()
 
+    def comecarSaida(self):
+        # encostou no fim da fase: a partir de agora o movimento é automático
+        self.saindoDaFase = True
+        self.direcao = 'direita'
+        self.contadorInvencivel = 0     # não fica piscando durante a animação
+        self.contadorArremesso = 0
+
+    def andarParaFora(self, fase, velocidade):
+        self.direcao = 'direita'
+        # no X não colide com nada: nenhuma parede pode prender o Lula antes de ele sair da tela
+        self.x += velocidade
+        if self.x - self.hitMeiaLarg < fase.largura:
+            # ainda dentro da fase: gravidade e chão normais (se encostou no amarelo pulando, ele cai)
+            self.vy = max(self.vy - self.gravidade, -self.velQuedaMax)
+            bateu = self.moverEixo(fase, 0.0, self.vy)
+            if bateu:
+                self.noChao = self.vy < 0
+                self.vy = 0.0
+            else:
+                self.noChao = False
+        else:
+            # além da borda da fase não existe chão: segue reto na mesma altura
+            self.vy = 0.0
+        self.andando = self.noChao
+        self.animar()
+
+    def saiuDaTela(self, direitaDaTela):
+        # o desenho inteiro já passou da borda direita da câmera (ou caiu num buraco no caminho)
+        return self.x - self.meiaLargDesenho > direitaDaTela or self.y < -100
+
     def morto(self):
         return self.vida <= 0
 
@@ -308,7 +347,7 @@ class LulaObject:
     def levarDano(self, dano):
         # depois de apanhar fica invencível um tempo (piscando), para não perder várias vidas de uma vez.
         # com 2 de vida, apanhar volta para 1: perde o poder e os sprites voltam ao normal
-        if self.contadorInvencivel > 0 or self.morto():
+        if self.contadorInvencivel > 0 or self.morto() or self.saindoDaFase:
             return
         self.vida = max(0, self.vida - dano)
         self.contadorInvencivel = self.tempoInvencivel
@@ -319,8 +358,9 @@ class LulaObject:
         self.vy = self.forcaQuique
         self.noChao = False
 
-    def reiniciar(self):
-        # volta ao estado do começo da fase
+    def reiniciar(self, manterVida=False):
+        # volta ao estado do começo da fase.
+        # manterVida: ao passar de fase o Lula continua com o poder que tinha (morrer volta para 1)
         self.x, self.y = self.inicioX, self.inicioY
         self.vy = 0.0
         self.noChao = False
@@ -330,10 +370,12 @@ class LulaObject:
         self.andando = False
         self.frameAtual = 0
         self.contadorFrames = 0
-        self.vida = self.vidaInicial
+        if not manterVida:
+            self.vida = self.vidaInicial
         self.contadorInvencivel = 0
         self.contadorArremesso = 0
         self.tiroPressionadoAntes = False
+        self.saindoDaFase = False
         self.xAnterior = self.x
         self.yAnterior = self.y
         self.contadorMorte = 0

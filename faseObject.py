@@ -12,7 +12,7 @@ from florObject import FlorObject
 from bolaDeFogoObject import BolaDeFogoObject
 
 PASTA_BASE = os.path.dirname(os.path.abspath(__file__))
-PASTA_FASE = os.path.join(PASTA_BASE, 'textures', 'fase')
+PASTA_TEXTURAS = os.path.join(PASTA_BASE, 'textures')
 PASTA_SHADERS = os.path.join(PASTA_BASE, 'shaders')
 
 # cores do mapa de colisão que viram entidades / áreas especiais
@@ -70,9 +70,10 @@ def preencherComBlocos(tipo, retangulos):
     return blocos
 
 class FaseObject:
-    def __init__(self, imagem='fase-teste.png', colisao='fase-colisao-teste.png', escala=1):
-        self.caminhoImagem = os.path.join(PASTA_FASE, imagem)
-        self.caminhoColisao = os.path.join(PASTA_FASE, colisao)
+    def __init__(self, pasta='fase', imagem='fase-teste.png', colisao='fase-colisao-teste.png', escala=1):
+        # pasta dentro de textures/ com a arte e o mapa de colisão desta fase
+        self.caminhoImagem = os.path.join(PASTA_TEXTURAS, pasta, imagem)
+        self.caminhoColisao = os.path.join(PASTA_TEXTURAS, pasta, colisao)
 
         # o mundo tem o tamanho da arte da fase multiplicado pela escala (em pixels do mundo)
         arte = Image.open(self.caminhoImagem)
@@ -243,6 +244,25 @@ class FaseObject:
         if self.areaColide(self.solido, x0, y0, x1, y1):
             return True
         return any(bloco.colide(x0, y0, x1, y1) for bloco in self.blocos)
+
+    def chaoSeguroAbaixo(self, x0, x1, y):
+        # descendo a partir da altura y na faixa [x0, x1): a primeira coisa sólida que aparece
+        # é chão normal? (vermelho = morte e nada embaixo = buraco sem fundo não contam)
+        xa = max(int(np.floor(x0)), 0)
+        xb = min(int(np.ceil(x1)), self.largura)
+        ya = min(int(np.floor(y)), self.altura)
+        if xa >= xb or ya <= 0:
+            return False
+        linhas = np.nonzero(self.solido[:ya, xa:xb].any(axis=1))[0]
+        topoMapa = int(linhas[-1]) if len(linhas) else -1
+        topoBlocos = max((b.y + b.altura for b in self.blocos
+                          if b.solido and b.x < x1 and b.x + b.largura > x0 and b.y + b.altura <= y),
+                         default=-1)
+        if topoMapa < 0 and topoBlocos < 0:
+            return False
+        if topoBlocos > topoMapa:           # um bloco fica acima do chão do mapa: cai em cima dele
+            return True
+        return not self.mortal[topoMapa, xa:xb].any()
 
     def colideChegada(self, x0, y0, x1, y1):
         return self.areaColide(self.chegada, x0, y0, x1, y1)

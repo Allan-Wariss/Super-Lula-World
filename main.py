@@ -9,8 +9,17 @@ from camera import *
 from texture import *
 from spriteRenderer import SpriteRenderer
 from textoObject import TextoObject
+from salvamento import carregarFase, salvarFase
 
-fase = FaseObject(escala=1)                  # tamanho original da arte (a colisão acompanha a escala)
+# fases em ordem: pasta dentro de textures/, arte e mapa de colisão (a zona amarela marca o fim)
+FASES = [
+    {'pasta': 'fase', 'imagem': 'fase-teste.png', 'colisao': 'fase-colisao-teste.png'},
+    {'pasta': 'fase2', 'imagem': 'fase2.png', 'colisao': 'fase2-colisao.png'},
+]
+
+# continua da fase salva (morrer sempre volta para o começo da fase atual)
+faseAtual = carregarFase(len(FASES))
+fase = FaseObject(**FASES[faseAtual], escala=1)  # tamanho original da arte (a colisão acompanha a escala)
 # posição inicial do Lula acompanha a escala da fase; o tamanho dele não muda
 lula = LulaObject(x=60.0 * fase.escala, y=200.0 * fase.escala)
 
@@ -63,6 +72,9 @@ def pararMusica():
         musica.stop()
 
 def areaVisivel():
+    # saindo da fase a câmera fica parada: a área visível é onde ela parou
+    if lula.saindoDaFase:
+        return camera.x, camera.x + camera.larguraVisivel
     # o que a câmera mostra seguindo o Lula agora (calculado direto da posição dele,
     # então funciona igual mesmo logo depois de reiniciar, antes do próximo desenho)
     return camera.areaVisivelX(lula.x, fase.largura)
@@ -74,7 +86,29 @@ def reiniciarFase():
     fase.ativarInimigos(areaVisivel())  # os que já estão na tela do começo fazem parte da cena inicial
     tocarMusica()                       # a música recomeça junto com a fase
 
+def irParaProximaFase(window):
+    # troca a fase inteira (arte, colisão, blocos, inimigos) pela próxima e salva o progresso.
+    # depois da última fase o jogo volta para a primeira
+    global fase, faseAtual
+    faseAtual = (faseAtual + 1) % len(FASES)
+    salvarFase(faseAtual)
+
+    fase.delete()                       # libera as texturas/buffers da fase que acabou
+    fase = FaseObject(**FASES[faseAtual], escala=1)
+    fase.init()
+
+    # a câmera mostra a altura da arte da nova fase (com o mesmo zoom)
+    camera.alturaVisivel = fase.alturaArte / ZOOM
+    larg, alt = glfw.get_framebuffer_size(window)
+    if larg > 0 and alt > 0:
+        camera.ajustarTela(larg, alt)
+
+    lula.reiniciar(manterVida=True)     # passou de fase: continua com o poder que tinha
+    mensagemFase.visivel = False
+    fase.ativarInimigos(areaVisivel())
+
 def update(window):
+    # devolve True quando carregou uma fase nova (o loop principal descarta o tempo gasto carregando)
     global tecla_c_anterior
 
     # tecla C liga/desliga a visualização da colisão por cima da arte
@@ -90,14 +124,24 @@ def update(window):
             pararMusica()
         if lula.terminouMorte():
             reiniciarFase()
-        return
+        return False
 
     # inimigos andando, contato com o Lula e partículas dos blocos quebrados
+    # (continua rodando durante a saída; o Lula não leva dano nesse tempo)
     fase.atualizar(lula, areaVisivel())
 
-    # encostou na parte amarela -> passou de fase (a transição para a próxima fase entra depois)
-    if not mensagemFase.visivel and fase.colideChegada(*lula.hitbox(lula.x, lula.y)):
+    if lula.saindoDaFase:
+        # andando sozinho para a direita: quando sumir da tela, começa a próxima fase
+        if lula.saiuDaTela(camera.x + camera.larguraVisivel):
+            irParaProximaFase(window)
+            return True
+        return False
+
+    # encostou na parte amarela -> passou de fase: perde o controle e sai andando pela direita
+    if fase.colideChegada(*lula.hitbox(lula.x, lula.y)):
         mensagemFase.visivel = True
+        lula.comecarSaida()
+    return False
 
 
 def render(window, alfa):
@@ -110,8 +154,8 @@ def render(window, alfa):
 
     # a fase fica parada, quem se move é a câmera atrás do Lula
     # (segue a posição suavizada e alinhada, a mesma usada para desenhar o Lula -> ele não treme)
-    # morrendo: a câmera fica parada onde estava, para o Lula sair da tela
-    if not lula.morto():
+    # morrendo ou saindo da fase: a câmera fica parada onde estava, para o Lula sair da tela
+    if not lula.morto() and not lula.saindoDaFase:
         lx, ly = lula.posicaoDesenho(alfa)
         camera.seguir(camera.alinhar(lx), camera.alinhar(ly), fase.largura, fase.altura)
 
@@ -162,9 +206,15 @@ def main():
             # Movimento do Lula (A/D ou setas), pulo (W/↑/espaço), gravidade, colisão e animação
             lula.mover(window=window, fase=fase, velocidade=velocidade)
 
-            update(window)
+            trocouFase = update(window)
 
             acumulador -= TEMPO_POR_ATUALIZACAO
+
+            if trocouFase:
+                # carregar a fase nova demora um pouco: esse tempo não vira uma enxurrada de updates
+                acumulador = 0.0
+                last_time = glfw.get_time()
+                break
 
         render(window, acumulador / TEMPO_POR_ATUALIZACAO)
         glfw.swap_buffers(window)
