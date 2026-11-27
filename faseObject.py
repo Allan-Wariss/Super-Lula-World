@@ -8,6 +8,8 @@ from shader import Shader
 from blocoObject import BlocoObject
 from particulasObject import ParticulasObject
 from inimigoObject import InimigoObject, retangulosEncostam
+from florObject import FlorObject
+from bolaDeFogoObject import BolaDeFogoObject
 
 PASTA_BASE = os.path.dirname(os.path.abspath(__file__))
 PASTA_FASE = os.path.join(PASTA_BASE, 'textures', 'fase')
@@ -114,6 +116,11 @@ class FaseObject:
         self.regioesInimigos = regioes(rosa)
         self.criarInimigos()
 
+        # ---- entidades: power-ups e bolas de fogo (surgem durante o jogo) ----
+        self.flores = []
+        self.bolasDeFogo = []
+        self.maxBolasDeFogo = 2         # no máximo 2 bolas de fogo na tela ao mesmo tempo
+
         # imagem da colisão para o modo debug (tecla C): semi-transparente por cima da arte
         debug = np.zeros((self.altura, self.largura, 4), dtype=np.uint8)
         debug[preto] = (0, 0, 0, 255)
@@ -182,6 +189,8 @@ class FaseObject:
         BlocoObject.carregarTexturas()
         self.particulas.init()
         InimigoObject.carregarTextura()
+        FlorObject.carregarTextura()
+        BolaDeFogoObject.carregarTexturas()
         # quadradinhos semi-transparentes para mostrar a colisão dos blocos no modo debug
         self.texDebugBlocos = {
             'muro': Texture(Image.new('RGBA', (1, 1), (*COR_BLOCO_MURO, 160))).texId,
@@ -259,6 +268,8 @@ class FaseObject:
         # recria as entidades no estado inicial: os blocos quebrados e os inimigos mortos voltam
         self.criarBlocos()
         self.criarInimigos()
+        self.flores = []
+        self.bolasDeFogo = []
         self.particulas.limpar()
 
     def baterCabeca(self, x0, y0, x1, y1):
@@ -272,9 +283,18 @@ class FaseObject:
         bloco = max(acima, key=lambda b: min(x1, b.x + b.largura) - max(x0, b.x))
         if bloco.quebravel():
             self.quebrarBloco(bloco)
-        else:
-            bloco.abrir()
+        elif bloco.abrir():
+            # bloco [?] abriu agora: solta a flor, que sobe de dentro dele
+            self.flores.append(FlorObject(bloco))
         return bloco
+
+    def podeLancarBolaDeFogo(self):
+        return len(self.bolasDeFogo) < self.maxBolasDeFogo
+
+    def lancarBolaDeFogo(self, x, y, direcao):
+        # (x, y) é o centro de onde a bola sai; direcao = 1 (direita) ou -1 (esquerda)
+        tamanho = BolaDeFogoObject.TAMANHO
+        self.bolasDeFogo.append(BolaDeFogoObject(x - tamanho / 2, y - tamanho / 2, direcao))
 
     def quebrarBloco(self, bloco):
         self.blocos.remove(bloco)
@@ -292,7 +312,39 @@ class FaseObject:
         for inimigo in self.inimigos:
             inimigo.atualizar(self, lula, self.inimigos)
         self.verificarInimigos(lula)
+        self.atualizarFlores(lula)
+        self.atualizarBolasDeFogo(areaVisivel)
         self.inimigos = [i for i in self.inimigos if not i.removivel()]
+
+    def atualizarFlores(self, lula):
+        # Lula encostou na flor -> pega o power-up (vida 2, sprites vermelhos e bolas de fogo)
+        caixa = lula.hitbox(lula.x, lula.y)
+        for flor in list(self.flores):
+            flor.atualizar()
+            if retangulosEncostam(caixa, flor.retangulo()):
+                lula.pegarPoder()
+                self.flores.remove(flor)
+
+    def atualizarBolasDeFogo(self, areaVisivel):
+        esquerda, direita = areaVisivel
+        for bola in self.bolasDeFogo:
+            bola.atualizar(self)
+            if not bola.viva:
+                # bateu na parede ou acabaram os quiques: apaga com umas faíscas
+                self.particulas.faiscas(bola.x + bola.largura / 2, bola.y + bola.altura / 2, quantidade=5)
+                continue
+            # saiu da tela: some sem efeito
+            if bola.x + bola.largura < esquerda - 16 or bola.x > direita + 16:
+                bola.viva = False
+                continue
+            # encostou num inimigo -> o inimigo morre e a bola some
+            for inimigo in self.inimigos:
+                if inimigo.ativo and inimigo.vivo and retangulosEncostam(bola.retangulo(), inimigo.retangulo()):
+                    inimigo.queimado()
+                    self.particulas.explodir(inimigo.x, inimigo.y, inimigo.largura, inimigo.altura, paleta='fogo')
+                    bola.viva = False
+                    break
+        self.bolasDeFogo = [b for b in self.bolasDeFogo if b.viva]
 
     def verificarInimigos(self, lula):
         # contato do Lula com os inimigos:
@@ -326,7 +378,13 @@ class FaseObject:
         glBindTexture(GL_TEXTURE_2D, self.texId)
         glDrawElements(GL_TRIANGLES, len(self.faces), GL_UNSIGNED_INT, None)
 
-        # 2. entidades bloco por cima da arte, e os pedaços dos que quebraram
+        # 2. flores (antes dos blocos: enquanto sobem, a parte dentro do bloco fica escondida),
+        #    entidades bloco por cima da arte, e os pedaços dos que quebraram
+        if self.flores:
+            sprites.comecar(projecao)
+            for flor in self.flores:
+                flor.draw(sprites, alfa, alinhar)
+            sprites.terminar()
         self.drawBlocos(sprites, projecao)
         self.particulas.draw(sprites, projecao)
 
@@ -334,6 +392,8 @@ class FaseObject:
         sprites.comecar(projecao)
         for inimigo in self.inimigos:
             inimigo.draw(sprites, alfa, alinhar)
+        for bola in self.bolasDeFogo:
+            bola.draw(sprites, alfa, alinhar)
         sprites.terminar()
 
         # 3. modo debug: colisão desenhada por cima de tudo, meio transparente
@@ -363,4 +423,6 @@ class FaseObject:
         BlocoObject.deletarTexturas()
         self.particulas.delete()
         InimigoObject.deletarTextura()
+        FlorObject.deletarTextura()
+        BolaDeFogoObject.deletarTexturas()
         self.shader.delete()

@@ -30,3 +30,12 @@ class Texture:
         )
 
         glBindTexture(GL_TEXTURE_2D, 0)             # desativa. Ativa apenas quando for usar
+
+def pixelArt(img, tamanho):
+    # reduz uma imagem grande para a resolução final (1 pixel da textura = 1 pixel do mundo)
+    # e deixa a transparência "dura" (cada pixel é opaco ou vazio), para as bordas ficarem
+    # nítidas como pixel art e não borradas
+    img = img.resize(tamanho, Image.BOX)
+    alfa = img.getchannel('A').point(lambda a: 255 if a >= 128 else 0)
+    img.putalpha(alfa)
+    return img

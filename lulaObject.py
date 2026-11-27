@@ -4,12 +4,19 @@ import ctypes
 import numpy as np
 from OpenGL.GL import *
 import glfw
-from PIL import Image
+from PIL import Image, ImageOps
 from texture import Texture
 from shader import Shader
 
 PASTA_BASE = os.path.dirname(os.path.abspath(__file__))
-PASTA_SPRITES = os.path.join(PASTA_BASE, 'textures', 'Lula', 'lula_walk_sprites_png')
+# visual do Lula conforme a vida: 1 = normal, 2 = vermelho (pegou a flor, joga bolas de fogo)
+PASTAS_VISUAL = {
+    'normal': os.path.join(PASTA_BASE, 'textures', 'Lula', 'lula_walk_sprites_png'),
+    'vermelho': os.path.join(PASTA_BASE, 'textures', 'lula_red'),
+}
+# pose de arremesso (só do vermelho): 192x320, desenho só entre (4, 66) e (188, 254), virado para a direita
+ARQUIVO_ARREMESSO = os.path.join(PASTA_BASE, 'textures', 'lula_red', 'powerup_cast_fire.png')
+RECORTE_ARREMESSO = (4, 66, 188, 254)
 PASTA_SHADERS = os.path.join(PASTA_BASE, 'shaders')
 
 class LulaObject:
@@ -20,9 +27,11 @@ class LulaObject:
         self.inicioX = x
         self.inicioY = y
 
-        # vida: encostar no vermelho do mapa zera a vida na hora
-        self.vidaMax = 1
-        self.vida = self.vidaMax
+        # vida: começa com 1. a flor sobe para 2 (Lula vermelho). inimigo tira 1.
+        # encostar no vermelho do mapa zera a vida na hora
+        self.vidaInicial = 1
+        self.vidaMax = 2
+        self.vida = self.vidaInicial
         self.tempoInvencivel = 90   # updates sem levar dano depois de apanhar (1,5 s)
         self.contadorInvencivel = 0
         self.forcaQuique = 8.0      # impulso para cima ao pisar num inimigo
@@ -42,6 +51,11 @@ class LulaObject:
         self.contadorCoyote = 0
         self.puloPressionadoAntes = False
 
+        # bola de fogo (tecla F, só com o Lula vermelho)
+        self.tempoPoseArremesso = 12    # updates mostrando a pose de arremesso depois de jogar
+        self.contadorArremesso = 0
+        self.tiroPressionadoAntes = False
+
         # sprites de caminhada têm 192x320 px, então a largura é 0.6 da altura
         alt = 50.0
 
@@ -56,9 +70,15 @@ class LulaObject:
 
         # cada vértice: [x, y, u, v] -> tudo intercalado num único VBO.
         # um quad por pose, porque andar e pular têm proporções diferentes
+        # a pose de arremesso, recortada, tem 184x188: desenhada com a altura do boneco
+        larguraArremesso = RECORTE_ARREMESSO[2] - RECORTE_ARREMESSO[0]
+        alturaArremesso = RECORTE_ARREMESSO[3] - RECORTE_ARREMESSO[1]
+        altArremesso = self.hitAlt
+        self.resolucaoArremesso = (90, 92)
         self.quads = {
             'andar': self.criarQuad(alt * 0.6 / 2, alt),
             'pulo': self.criarQuad(altPulo * 1496 / 2048 / 2, altPulo),
+            'arremesso': self.criarQuad(altArremesso * larguraArremesso / alturaArremesso / 2, altArremesso),
         }
 
         self.faces = np.array([
@@ -92,16 +112,25 @@ class LulaObject:
         self.shader = Shader(os.path.join(PASTA_SHADERS, 'lula.vert'),
                              os.path.join(PASTA_SHADERS, 'lula.frag'))
 
-        # texturas[pose][direção] -> lista de frames
-        self.texturas = {
-            'andar': {
-                'direita': self.carregarSprites('walk_right'),
-                'esquerda': self.carregarSprites('walk_left'),
-            },
-            'pulo': {
-                'direita': self.carregarSprites('jump_right', self.resolucaoPulo),
-                'esquerda': self.carregarSprites('jump_left', self.resolucaoPulo),
-            },
+        # texturas[visual][pose][direção] -> lista de frames
+        self.texturas = {}
+        for visual, pasta in PASTAS_VISUAL.items():
+            self.texturas[visual] = {
+                'andar': {
+                    'direita': self.carregarSprites(pasta, 'walk_right'),
+                    'esquerda': self.carregarSprites(pasta, 'walk_left'),
+                },
+                'pulo': {
+                    'direita': self.carregarSprites(pasta, 'jump_right', self.resolucaoPulo),
+                    'esquerda': self.carregarSprites(pasta, 'jump_left', self.resolucaoPulo),
+                },
+            }
+        # arremesso: só existe virado para a direita, a esquerda é o espelho
+        img = Image.open(ARQUIVO_ARREMESSO).convert('RGBA').crop(RECORTE_ARREMESSO)
+        img = img.resize(self.resolucaoArremesso, Image.LANCZOS)
+        self.texturas['vermelho']['arremesso'] = {
+            'direita': [Texture(img).texId],
+            'esquerda': [Texture(ImageOps.mirror(img)).texId],
         }
 
         for pose, vertices in self.quads.items():
@@ -139,8 +168,8 @@ class LulaObject:
         glBindBuffer(GL_ARRAY_BUFFER, 0)
         return vao
 
-    def carregarSprites(self, pasta, resolucao=None):
-        caminho = os.path.join(PASTA_SPRITES, pasta)
+    def carregarSprites(self, pastaVisual, pasta, resolucao=None):
+        caminho = os.path.join(pastaVisual, pasta)
         arquivos = sorted(f for f in os.listdir(caminho) if f.endswith('.png'))
         texIds = []
         for f in arquivos:
@@ -212,6 +241,17 @@ class LulaObject:
         if self.y < -100:
             self.vida = 0
 
+        # 4. bola de fogo: só no momento em que aperta F, e só com o Lula vermelho
+        tiro = glfw.get_key(window, glfw.KEY_F) == glfw.PRESS
+        if self.contadorArremesso > 0:
+            self.contadorArremesso -= 1
+        if tiro and not self.tiroPressionadoAntes and self.temPoder() and fase.podeLancarBolaDeFogo():
+            lado = 1 if self.direcao == 'direita' else -1
+            # sai da altura da mão, um pouco à frente do corpo
+            fase.lancarBolaDeFogo(self.x + lado * (self.hitMeiaLarg + 4), self.y + self.hitAlt * 0.55, lado)
+            self.contadorArremesso = self.tempoPoseArremesso
+        self.tiroPressionadoAntes = tiro
+
         # só anima a caminhada com os pés no chão
         self.andando = dx != 0.0 and self.noChao
         self.animar()
@@ -219,12 +259,25 @@ class LulaObject:
     def morto(self):
         return self.vida <= 0
 
+    def temPoder(self):
+        # com 2 de vida o Lula está vermelho e pode jogar bolas de fogo
+        return self.vida >= 2
+
+    def visual(self):
+        return 'vermelho' if self.temPoder() else 'normal'
+
+    def pegarPoder(self):
+        # pegou a flor: vida 2 (se já tinha, continua 2)
+        self.vida = self.vidaMax
+
     def levarDano(self, dano):
-        # depois de apanhar fica invencível um tempo (piscando), para não perder várias vidas de uma vez
+        # depois de apanhar fica invencível um tempo (piscando), para não perder várias vidas de uma vez.
+        # com 2 de vida, apanhar volta para 1: perde o poder e os sprites voltam ao normal
         if self.contadorInvencivel > 0 or self.morto():
             return
         self.vida = max(0, self.vida - dano)
         self.contadorInvencivel = self.tempoInvencivel
+        self.contadorArremesso = 0
 
     def quicar(self):
         # pisou num inimigo: pula de novo (segurando o pulo vai mais alto, igual ao pulo normal)
@@ -242,8 +295,10 @@ class LulaObject:
         self.andando = False
         self.frameAtual = 0
         self.contadorFrames = 0
-        self.vida = self.vidaMax
+        self.vida = self.vidaInicial
         self.contadorInvencivel = 0
+        self.contadorArremesso = 0
+        self.tiroPressionadoAntes = False
         self.xAnterior = self.x
         self.yAnterior = self.y
 
@@ -299,11 +354,14 @@ class LulaObject:
         self.contadorFrames += 1
         if self.contadorFrames >= self.ticksPorFrame:
             self.contadorFrames = 0
-            self.frameAtual = (self.frameAtual + 1) % len(self.texturas['andar'][self.direcao])
+            self.frameAtual = (self.frameAtual + 1) % len(self.texturas[self.visual()]['andar'][self.direcao])
 
     def poseAtual(self):
+        # logo depois de jogar uma bola de fogo mostra a pose de arremesso.
         # no ar (pulando ou caindo) usa o sprite de pulo; a direção é sempre a última tecla apertada,
         # então virar no meio do pulo troca o sprite para o outro lado na hora
+        if self.contadorArremesso > 0 and self.temPoder():
+            return 'arremesso'
         return 'andar' if self.noChao else 'pulo'
 
     def draw(self, projecao, alfa, alinhar):
@@ -317,7 +375,7 @@ class LulaObject:
         self.shader.setVec2('uDeslocamento', alinhar(x), alinhar(y))
 
         pose = self.poseAtual()
-        frames = self.texturas[pose][self.direcao]
+        frames = self.texturas[self.visual()][pose][self.direcao]
         frame = self.frameAtual if pose == 'andar' else 0
 
         glActiveTexture(GL_TEXTURE0)
@@ -333,7 +391,8 @@ class LulaObject:
     def delete(self):
         glDeleteVertexArrays(len(self.vaos), list(self.vaos.values()))
         glDeleteBuffers(len(self.buffers), self.buffers)
-        for porDirecao in self.texturas.values():
-            for texIds in porDirecao.values():
-                glDeleteTextures(texIds)
+        for porPose in self.texturas.values():
+            for porDirecao in porPose.values():
+                for texIds in porDirecao.values():
+                    glDeleteTextures(texIds)
         self.shader.delete()

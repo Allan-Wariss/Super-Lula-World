@@ -2,7 +2,7 @@ import os
 import math
 from PIL import Image
 from OpenGL.GL import *
-from texture import Texture
+from texture import Texture, pixelArt
 
 PASTA_BASE = os.path.dirname(os.path.abspath(__file__))
 PASTA_MINION = os.path.join(PASTA_BASE, 'textures', 'minion')
@@ -25,14 +25,6 @@ ALTURA_HITBOX = 29
 DISTANCIA_SPAWN = 64
 
 TICKS_POR_FRAME = 10                # troca o passo a cada 10 updates (6 passos por segundo)
-
-def pixelArt(img, tamanho):
-    # reduz para a resolução final e deixa a transparência "dura" (cada pixel é opaco ou vazio),
-    # para as bordas ficarem nítidas como pixel art e não borradas
-    img = img.resize(tamanho, Image.BOX)
-    alfa = img.getchannel('A').point(lambda a: 255 if a >= 128 else 0)
-    img.putalpha(alfa)
-    return img
 
 class InimigoObject:
     # minion que anda de um lado para o outro.
@@ -105,7 +97,7 @@ class InimigoObject:
         # 1. anda na horizontal, um pixel por vez; bateu em parede, bloco, jogador
         #    ou outro inimigo -> vira para o lado oposto
         passos = math.ceil(self.velocidade)
-        passo = self.velocidade / passos * self.direcao
+        passo = self.velocidade / passos * self.direcao if passos else 0.0
         for _ in range(passos):
             proximo = self.retangulo(x=self.x + passo)
             if self.bloqueado(proximo, fase, lula, outros):
@@ -145,6 +137,11 @@ class InimigoObject:
         if retangulosEncostam(ret, lula.hitbox(lula.x, lula.y)):
             return True
         return any(o is not self and o.ativo and o.vivo and retangulosEncostam(ret, o.retangulo()) for o in outros)
+
+    def queimado(self):
+        # acertado por uma bola de fogo: some na hora (as partículas ficam por conta da fase)
+        self.vivo = False
+        self.tempoEsmagado = 0
 
     def pisoteado(self):
         self.vivo = False
