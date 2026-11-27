@@ -10,6 +10,7 @@ PASTA_BLOCOS = os.path.join(PASTA_BASE, 'textures', 'blocks')
 SPRITES_BLOCOS = {
     'muro': 'Bloco-Muro.png',       # azul (#004aad) no mapa de colisão
     'interrogacao': 'Bloco [_].png', # verde no mapa de colisão
+    'lulatron': 'Bloco [_].png',     # laranja no mapa de colisão: mesmo bloco, mas solta o Lulatron
 }
 
 # os PNGs originais são enormes (~1600 px); reduzidos para este tamanho antes de virar textura,
@@ -17,7 +18,7 @@ SPRITES_BLOCOS = {
 RESOLUCAO_SPRITE = 32
 
 # blocos que não quebram: ao serem acertados por baixo passam de 'fechado' para 'aberto'
-TIPOS_INQUEBRAVEIS = {'interrogacao'}
+TIPOS_INQUEBRAVEIS = {'interrogacao', 'lulatron'}
 
 def acinzentar(img):
     # versão "aberta" do bloco: sem cor e um pouco mais escura, mantendo a transparência

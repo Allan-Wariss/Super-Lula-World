@@ -9,6 +9,7 @@ from blocoObject import BlocoObject
 from particulasObject import ParticulasObject
 from inimigoObject import InimigoObject, retangulosEncostam
 from florObject import FlorObject
+from lulatronObject import LulatronObject
 from bolaDeFogoObject import BolaDeFogoObject
 
 PASTA_BASE = os.path.dirname(os.path.abspath(__file__))
@@ -20,6 +21,12 @@ COR_BLOCO_MURO = (0x00, 0x4a, 0xad)     # azul  -> blocos de muro
 COR_BLOCO_INTERROGACAO = (97, 193, 41)  # verde -> blocos [?]
 COR_CHEGADA = (255, 237, 0)             # amarelo -> fim da fase
 COR_INIMIGO = (255, 0, 252)             # rosa -> onde nasce um inimigo
+COR_BLOCO_LULATRON = (255, 69, 0)       # laranja -> bloco [_] que solta o power-up do Lulatron
+
+# altura de toda fase em pixels do mundo (antes de multiplicar pela escala).
+# a arte pode ter qualquer resolução: ela é esticada para esta altura, então trocar a imagem
+# por uma versão maior/mais nítida não muda o tamanho do Lula e dos inimigos na tela
+ALTURA_MUNDO = 482
 
 def mascaraCor(r, g, b, cor, tolerancia=48):
     return (np.abs(r - cor[0]) < tolerancia) & (np.abs(g - cor[1]) < tolerancia) & (np.abs(b - cor[2]) < tolerancia)
@@ -75,12 +82,13 @@ class FaseObject:
         self.caminhoImagem = os.path.join(PASTA_TEXTURAS, pasta, imagem)
         self.caminhoColisao = os.path.join(PASTA_TEXTURAS, pasta, colisao)
 
-        # o mundo tem o tamanho da arte da fase multiplicado pela escala (em pixels do mundo)
+        # o mundo tem sempre ALTURA_MUNDO de altura (vezes a escala); a largura segue a proporção da arte
         arte = Image.open(self.caminhoImagem)
         self.larguraArte, self.alturaArte = arte.size
         self.escala = escala
-        self.largura = self.larguraArte * escala
-        self.altura = self.alturaArte * escala
+        self.altura = ALTURA_MUNDO * escala
+        self.largura = round(self.larguraArte * self.altura / self.alturaArte)
+        self.artePorMundo = self.alturaArte / self.altura   # pixels da arte por pixel do mundo
 
         # ---- mapa de colisão ----
         # a imagem de colisão tem o mesmo tamanho da arte; ela é esticada (sem suavizar)
@@ -99,6 +107,8 @@ class FaseObject:
         verde = mascaraCor(r, g, b, COR_BLOCO_INTERROGACAO)
         rosa = mascaraCor(r, g, b, COR_INIMIGO)
         amarelo = mascaraCor(r, g, b, COR_CHEGADA)
+        # laranja é parecido com o vermelho (255, 40, 28): tolerância pequena para não confundir
+        laranja = mascaraCor(r, g, b, COR_BLOCO_LULATRON, tolerancia=16)
 
         self.mortal = vermelho
         # o vermelho é sólido (o Lula não atravessa), mas encostar nele mata
@@ -109,7 +119,8 @@ class FaseObject:
         # ---- entidades: blocos ----
         # o mapa já está com y para cima, então a linha da máscara é o y do mundo
         # as regiões ficam guardadas para recriar os blocos quando a fase reinicia
-        self.regioesBlocos = {'muro': regioes(azul), 'interrogacao': regioes(verde)}
+        self.regioesBlocos = {'muro': regioes(azul), 'interrogacao': regioes(verde),
+                              'lulatron': regioes(laranja, areaMinima=10)}
         self.criarBlocos()
 
         # ---- entidades: inimigos ----
@@ -118,7 +129,7 @@ class FaseObject:
         self.criarInimigos()
 
         # ---- entidades: power-ups e bolas de fogo (surgem durante o jogo) ----
-        self.flores = []
+        self.flores = []                # power-ups saindo dos blocos (flores e o Lulatron)
         self.bolasDeFogo = []
         self.maxBolasDeFogo = 2         # no máximo 2 bolas de fogo na tela ao mesmo tempo
 
@@ -154,7 +165,9 @@ class FaseObject:
         ], dtype=np.uint32)
 
         # estilo 16 bits
-        self.tamanhoBloco = 2.0             # cada "pixel" retrô = 2x2 texels (3 deixava a arte borrada demais)
+        # cada "pixel" retrô = 2x2 pixels do mundo (3 deixava a arte borrada demais).
+        # o shader trabalha em texels: numa arte de resolução maior o bloco tem mais texels
+        self.tamanhoBloco = 2.0 * self.artePorMundo
         self.niveisCor = (31.0, 63.0, 31.0) # RGB565
 
         self.shader = None
@@ -166,15 +179,17 @@ class FaseObject:
         self.texDebugBlocos = {}
 
     def apagarBlocosDaArte(self, arte, margem=2):
+        margem = max(1, round(margem * self.artePorMundo))   # margem em pixels da arte
         pixels = np.array(arte).astype(np.float32)
         alturaImg, larguraImg = pixels.shape[:2]
         for retangulos in self.regioesBlocos.values():
             for x, y, larg, alt in retangulos:
-                # mundo (y para cima, escalado) -> imagem da arte (y para baixo)
-                x0 = max(int(x / self.escala) - margem, 1)
-                x1 = min(int((x + larg) / self.escala) + margem, larguraImg - 1)
-                topo = max(alturaImg - int((y + alt) / self.escala) - margem, 0)
-                baixo = min(alturaImg - int(y / self.escala) + margem, alturaImg)
+                # mundo (y para cima) -> imagem da arte (y para baixo, na resolução dela)
+                k = self.artePorMundo
+                x0 = max(int(x * k) - margem, 1)
+                x1 = min(int((x + larg) * k) + margem, larguraImg - 1)
+                topo = max(alturaImg - int((y + alt) * k) - margem, 0)
+                baixo = min(alturaImg - int(y * k) + margem, alturaImg)
                 esquerda = pixels[topo:baixo, x0 - 1]       # coluna logo antes do bloco
                 direita = pixels[topo:baixo, x1]            # coluna logo depois
                 t = np.linspace(0.0, 1.0, x1 - x0)[None, :, None]
@@ -191,11 +206,13 @@ class FaseObject:
         self.particulas.init()
         InimigoObject.carregarTextura()
         FlorObject.carregarTextura()
+        LulatronObject.carregarTextura()
         BolaDeFogoObject.carregarTexturas()
         # quadradinhos semi-transparentes para mostrar a colisão dos blocos no modo debug
         self.texDebugBlocos = {
             'muro': Texture(Image.new('RGBA', (1, 1), (*COR_BLOCO_MURO, 160))).texId,
             'interrogacao': Texture(Image.new('RGBA', (1, 1), (*COR_BLOCO_INTERROGACAO, 160))).texId,
+            'lulatron': Texture(Image.new('RGBA', (1, 1), (*COR_BLOCO_LULATRON, 160))).texId,
         }
 
         self.vao = glGenVertexArrays(1)
@@ -304,8 +321,12 @@ class FaseObject:
         if bloco.quebravel():
             self.quebrarBloco(bloco)
         elif bloco.abrir():
-            # bloco [?] abriu agora: solta a flor, que sobe de dentro dele
-            self.flores.append(FlorObject(bloco))
+            # bloco [?] abriu agora: solta o power-up, que sobe de dentro dele
+            # (o laranja solta o Lulatron, que é único: o bloco só abre uma vez)
+            if bloco.tipo == 'lulatron':
+                self.flores.append(LulatronObject(bloco))
+            else:
+                self.flores.append(FlorObject(bloco))
         return bloco
 
     def podeLancarBolaDeFogo(self):
@@ -337,12 +358,12 @@ class FaseObject:
         self.inimigos = [i for i in self.inimigos if not i.removivel()]
 
     def atualizarFlores(self, lula):
-        # Lula encostou na flor -> pega o power-up (vida 2, sprites vermelhos e bolas de fogo)
+        # Lula encostou no power-up -> pega (flor: vida 2 e bolas de fogo; Lulatron: invencível)
         caixa = lula.hitbox(lula.x, lula.y)
         for flor in list(self.flores):
             flor.atualizar()
             if flor.saiu() and retangulosEncostam(caixa, flor.retangulo()):
-                lula.pegarPoder()
+                flor.pegar(lula)
                 self.flores.remove(flor)
 
     def atualizarBolasDeFogo(self, areaVisivel):
@@ -370,12 +391,17 @@ class FaseObject:
         # contato do Lula com os inimigos:
         # - caindo e com os pés acima do topo do inimigo no update anterior -> pisoteou, inimigo morre
         # - qualquer outro contato (pelos lados ou por baixo) -> Lula leva 1 de dano
+        # - com o Lulatron ativo: qualquer contato mata o inimigo
         x0, y0, x1, y1 = lula.hitbox(lula.x, lula.y)
         # 1 pixel de folga dos lados, para contar também quando só estão encostados
         caixa = (x0 - 1, y0 - 1, x1 + 1, y1)
         pisou = False
         for inimigo in self.inimigos:
             if not inimigo.ativo or not inimigo.vivo or not retangulosEncostam(caixa, inimigo.retangulo()):
+                continue
+            if lula.temLulatron():
+                inimigo.queimado()      # some na hora, explodindo em faíscas
+                self.particulas.explodir(inimigo.x, inimigo.y, inimigo.largura, inimigo.altura, paleta='fogo')
                 continue
             if lula.vy <= 0 and lula.yAnterior >= inimigo.topo() - 1:
                 inimigo.pisoteado()
@@ -444,5 +470,6 @@ class FaseObject:
         self.particulas.delete()
         InimigoObject.deletarTextura()
         FlorObject.deletarTextura()
+        LulatronObject.deletarTextura()
         BolaDeFogoObject.deletarTexturas()
         self.shader.delete()

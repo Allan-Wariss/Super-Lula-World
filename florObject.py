@@ -19,11 +19,13 @@ VELOCIDADE_SUBIDA = 0.7             # pixels por update saindo de dentro do bloc
 class FlorObject:
     # power-up: sai de dentro de um bloco [?] quando ele é aberto e fica parada em cima dele.
     # (x, y) é o canto inferior esquerdo, em pixels do mundo
+    LARGURA = LARGURA_FLOR
+    ALTURA = ALTURA_FLOR
     textura = 0
 
     def __init__(self, bloco):
-        self.largura = LARGURA_FLOR
-        self.altura = ALTURA_FLOR
+        self.largura = self.LARGURA
+        self.altura = self.ALTURA
         self.x = bloco.x + (bloco.largura - self.largura) / 2
         # começa escondida dentro do bloco e sobe até ficar apoiada no topo dele.
         # o bloco é desenhado depois da flor, então a parte ainda dentro dele fica escondida
@@ -43,6 +45,10 @@ class FlorObject:
         if cls.textura:
             glDeleteTextures([cls.textura])
             cls.textura = 0
+
+    def pegar(self, lula):
+        # Lula encostou: vida 2, sprites vermelhos e bolas de fogo
+        lula.pegarPoder()
 
     def atualizar(self):
         self.yAnterior = self.y

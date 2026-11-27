@@ -24,7 +24,7 @@ fase = FaseObject(**FASES[faseAtual], escala=1)  # tamanho original da arte (a c
 lula = LulaObject(x=60.0 * fase.escala, y=200.0 * fase.escala)
 
 ZOOM = 1.5                                   # câmera 1.5x mais perto que antes (antes mostrava 512 px de altura)
-camera = Camera(alturaVisivel=fase.alturaArte / ZOOM)
+camera = Camera(alturaVisivel=fase.altura / ZOOM)
 
 sprites = SpriteRenderer()                   # desenha blocos e texto
 mensagemFase = TextoObject('Passou de fase!')
@@ -35,6 +35,10 @@ velocidade = 2.5    # pixels do mundo por update
 ARQUIVO_MUSICA = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'songs', 'BackGroundSong.mp3')
 VOLUME_MUSICA = 0.05    # bem baixo, só de fundo (0 a 1)
 musica = None
+# música do Lulatron: enquanto o power-up dura, a música normal pausa e esta toca
+ARQUIVO_MUSICA_LULATRON = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'songs', 'lulatron.mp3')
+musicaLulatron = None
+tocandoLulatron = False
 tecla_c_anterior = False
 
 def init():
@@ -50,7 +54,7 @@ def init():
     lula.init()                         # cria shader, VAO, VBO e carrega os sprites
 
 def iniciarAudio():
-    global musica
+    global musica, musicaLulatron
     try:
         musica = Playback()
         musica.load_file(ARQUIVO_MUSICA)
@@ -59,7 +63,33 @@ def iniciarAudio():
     except Exception as erro:           # sem placa de som / arquivo faltando: o jogo roda mudo
         print('Sem áudio:', erro)
         musica = None
+    try:
+        musicaLulatron = Playback()
+        musicaLulatron.load_file(ARQUIVO_MUSICA_LULATRON)
+        musicaLulatron.set_volume(VOLUME_MUSICA)
+        musicaLulatron.loop_at_end(True)
+    except Exception as erro:
+        print('Sem música do Lulatron:', erro)
+        musicaLulatron = None
     tocarMusica()
+
+def atualizarMusicaLulatron():
+    # começou o Lulatron: pausa a música normal (guarda onde parou) e toca a dele do começo.
+    # acabou: para a dele e a normal continua de onde estava
+    global tocandoLulatron
+    if lula.temLulatron() and not tocandoLulatron:
+        tocandoLulatron = True
+        if musica:
+            musica.pause()
+        if musicaLulatron:
+            musicaLulatron.stop()
+            musicaLulatron.play()
+    elif not lula.temLulatron() and tocandoLulatron:
+        tocandoLulatron = False
+        if musicaLulatron:
+            musicaLulatron.stop()
+        if musica:
+            musica.resume()
 
 def tocarMusica():
     # do começo (stop volta a posição para 0)
@@ -68,8 +98,13 @@ def tocarMusica():
         musica.play()
 
 def pararMusica():
+    # para tudo (inclusive a do Lulatron): usado na morte
+    global tocandoLulatron
+    tocandoLulatron = False
     if musica:
         musica.stop()
+    if musicaLulatron:
+        musicaLulatron.stop()
 
 def areaVisivel():
     # saindo da fase a câmera fica parada: a área visível é onde ela parou
@@ -97,8 +132,8 @@ def irParaProximaFase(window):
     fase = FaseObject(**FASES[faseAtual], escala=1)
     fase.init()
 
-    # a câmera mostra a altura da arte da nova fase (com o mesmo zoom)
-    camera.alturaVisivel = fase.alturaArte / ZOOM
+    # a câmera mostra a altura do mundo da nova fase (com o mesmo zoom)
+    camera.alturaVisivel = fase.altura / ZOOM
     larg, alt = glfw.get_framebuffer_size(window)
     if larg > 0 and alt > 0:
         camera.ajustarTela(larg, alt)
@@ -129,6 +164,7 @@ def update(window):
     # inimigos andando, contato com o Lula e partículas dos blocos quebrados
     # (continua rodando durante a saída; o Lula não leva dano nesse tempo)
     fase.atualizar(lula, areaVisivel())
+    atualizarMusicaLulatron()
 
     if lula.saindoDaFase:
         # andando sozinho para a direita: quando sumir da tela, começa a próxima fase

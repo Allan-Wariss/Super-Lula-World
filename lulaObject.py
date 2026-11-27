@@ -46,6 +46,14 @@ class LulaObject:
         self.contadorMorte = 0
         self.morteNoBuraco = False  # caiu para fora da fase: não tem pulo, só espera
 
+        # Lulatron (power-up do bloco laranja): 20 s invencível, piscando em todas as cores
+        # e matando todo inimigo que encostar. cair para fora da fase continua matando
+        self.tempoLulatron = 20 * 60    # updates (20 s)
+        self.contadorLulatron = 0
+        # cores do pisca-pisca (troca a cada poucos updates, como a estrela do Mario)
+        self.coresLulatron = [(1.0, 0.2, 0.2), (1.0, 0.6, 0.1), (1.0, 1.0, 0.2), (0.2, 1.0, 0.3),
+                              (0.2, 0.9, 1.0), (0.3, 0.4, 1.0), (0.9, 0.3, 1.0)]
+
         # fim de fase: encostou no amarelo -> perde o controle e anda sozinho para a direita
         # até sair da tela (a próxima fase só começa depois que ele some)
         self.saindoDaFase = False
@@ -205,6 +213,8 @@ class LulaObject:
             return
         if self.contadorInvencivel > 0:
             self.contadorInvencivel -= 1
+        if self.contadorLulatron > 0:
+            self.contadorLulatron -= 1
 
         esquerda = glfw.get_key(window, glfw.KEY_A) == glfw.PRESS or glfw.get_key(window, glfw.KEY_LEFT) == glfw.PRESS
         direita = glfw.get_key(window, glfw.KEY_D) == glfw.PRESS or glfw.get_key(window, glfw.KEY_RIGHT) == glfw.PRESS
@@ -254,8 +264,9 @@ class LulaObject:
 
         # encostou no vermelho (caixa de colisão com 1 pixel de folga, para contar
         # também quando está só pisando ou encostado do lado) -> morre
+        # (com o Lulatron é invencível: o vermelho não mata, só cair da fase)
         x0, y0, x1, y1 = self.hitbox(self.x, self.y)
-        if fase.colideMortal(x0 - 1, y0 - 1, x1 + 1, y1 + 1):
+        if not self.temLulatron() and fase.colideMortal(x0 - 1, y0 - 1, x1 + 1, y1 + 1):
             self.vida = 0
 
         # caiu para fora da fase -> também morre
@@ -307,6 +318,19 @@ class LulaObject:
         # o desenho inteiro já passou da borda direita da câmera (ou caiu num buraco no caminho)
         return self.x - self.meiaLargDesenho > direitaDaTela or self.y < -100
 
+    def pegarLulatron(self):
+        # pegar de novo com o efeito ativo recomeça os 20 s
+        self.contadorLulatron = self.tempoLulatron
+        self.contadorInvencivel = 0     # o pisca-pisca de dano dá lugar ao das cores
+
+    def temLulatron(self):
+        return self.contadorLulatron > 0 and not self.morto()
+
+    def corLulatron(self):
+        # cor da vez do pisca-pisca; nos últimos 3 s troca mais devagar, avisando que vai acabar
+        ticks = 8 if self.contadorLulatron < 3 * 60 else 3
+        return self.coresLulatron[(self.contadorLulatron // ticks) % len(self.coresLulatron)]
+
     def morto(self):
         return self.vida <= 0
 
@@ -347,7 +371,7 @@ class LulaObject:
     def levarDano(self, dano):
         # depois de apanhar fica invencível um tempo (piscando), para não perder várias vidas de uma vez.
         # com 2 de vida, apanhar volta para 1: perde o poder e os sprites voltam ao normal
-        if self.contadorInvencivel > 0 or self.morto() or self.saindoDaFase:
+        if self.contadorInvencivel > 0 or self.morto() or self.saindoDaFase or self.temLulatron():
             return
         self.vida = max(0, self.vida - dano)
         self.contadorInvencivel = self.tempoInvencivel
@@ -376,6 +400,7 @@ class LulaObject:
         self.contadorArremesso = 0
         self.tiroPressionadoAntes = False
         self.saindoDaFase = False
+        self.contadorLulatron = 0       # o Lulatron não passa para a próxima fase nem sobrevive à morte
         self.xAnterior = self.x
         self.yAnterior = self.y
         self.contadorMorte = 0
@@ -452,6 +477,12 @@ class LulaObject:
         # posição suavizada entre updates e alinhada na grade de pixels da tela
         x, y = self.posicaoDesenho(alfa)
         self.shader.setVec2('uDeslocamento', alinhar(x), alinhar(y))
+        # Lulatron: o sprite é tingido com a cor da vez (0 = desenho normal)
+        if self.temLulatron():
+            self.shader.setVec3('uCorTinta', *self.corLulatron())
+            self.shader.setFloat('uMisturaTinta', 0.6)
+        else:
+            self.shader.setFloat('uMisturaTinta', 0.0)
 
         pose = self.poseAtual()
         frames = self.texturas[self.visual()][pose][self.direcao]
