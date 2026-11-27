@@ -28,7 +28,9 @@ class FlorObject:
         # começa escondida dentro do bloco e sobe até ficar apoiada no topo dele.
         # o bloco é desenhado depois da flor, então a parte ainda dentro dele fica escondida
         self.yFinal = bloco.y + bloco.altura
-        self.y = self.yFinal - self.altura
+        # se o bloco for mais baixo que a flor, não deixa ela começar abaixo do bloco
+        # (senão já nasceria encostando na cabeça do Lula e seria pega na hora)
+        self.y = max(bloco.y, self.yFinal - self.altura)
         self.yAnterior = self.y
 
     @classmethod
@@ -45,6 +47,10 @@ class FlorObject:
     def atualizar(self):
         self.yAnterior = self.y
         self.y = min(self.y + VELOCIDADE_SUBIDA, self.yFinal)
+
+    def saiu(self):
+        # só pode ser pega depois de terminar de sair do bloco
+        return self.y >= self.yFinal
 
     def retangulo(self):
         return (self.x, self.y, self.x + self.largura, self.y + self.altura)

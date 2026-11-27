@@ -321,7 +321,7 @@ class FaseObject:
         caixa = lula.hitbox(lula.x, lula.y)
         for flor in list(self.flores):
             flor.atualizar()
-            if retangulosEncostam(caixa, flor.retangulo()):
+            if flor.saiu() and retangulosEncostam(caixa, flor.retangulo()):
                 lula.pegarPoder()
                 self.flores.remove(flor)
 
