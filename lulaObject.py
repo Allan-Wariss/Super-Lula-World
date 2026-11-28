@@ -5,7 +5,7 @@ import numpy as np
 from OpenGL.GL import *
 import glfw
 from PIL import Image, ImageOps
-from texture import Texture
+from texture import Texture, pixelArt
 from shader import Shader
 
 PASTA_BASE = os.path.dirname(os.path.abspath(__file__))
@@ -18,6 +18,22 @@ PASTAS_VISUAL = {
 ARQUIVO_ARREMESSO = os.path.join(PASTA_BASE, 'textures', 'lula_red', 'powerup_cast_fire.png')
 RECORTE_ARREMESSO = (4, 66, 188, 254)
 PASTA_SHADERS = os.path.join(PASTA_BASE, 'shaders')
+
+# sprites do Lulatron (power-up do bloco laranja): PNGs 314x314 com o boneco no meio.
+# todos são recortados com o MESMO retângulo, para os quadros ficarem alinhados entre si:
+# a largura inteira e de cima até a linha dos pés (y = 293)
+PASTA_LULATRON = os.path.join(PASTA_BASE, 'textures', 'lulatron_sprites')
+RECORTE_LULATRON = (0, 0, 314, 293)
+TOPO_CABECA_LULATRON = 24          # onde começa o desenho da cabeça dentro do recorte
+SPRITES_LULATRON = {
+    'parado': {'direita': ['01_idle_right.png']},   # parado para a esquerda = espelho
+    'andar': {
+        'direita': ['02_walk_right_01.png', '03_walk_right_02.png', '04_walk_right_03.png', '05_walk_right_04.png'],
+        'esquerda': ['07_walk_left_01.png', '08_walk_left_02.png', '09_walk_left_03.png', '10_walk_left_04.png'],
+    },
+    'pulo': {'direita': ['11_jump_right.png'], 'esquerda': ['12_jump_left.png']},
+    'arremesso': {'direita': ['13_attack_right.png'], 'esquerda': ['14_attack_left.png']},
+}
 
 class LulaObject:
     def __init__(self, x=60.0, y=200.0):
@@ -102,6 +118,17 @@ class LulaObject:
             'arremesso': self.criarQuad(altArremesso * larguraArremesso / alturaArremesso / 2, altArremesso),
         }
 
+        # Lulatron: um quad só para todas as poses (os recortes têm o mesmo tamanho).
+        # escala escolhida para a cabeça até os pés medir a altura do boneco (a caixa de colisão)
+        larguraRecorte = RECORTE_LULATRON[2] - RECORTE_LULATRON[0]
+        alturaRecorte = RECORTE_LULATRON[3] - RECORTE_LULATRON[1]
+        escalaLulatron = self.hitAlt / (alturaRecorte - TOPO_CABECA_LULATRON)
+        larguraLulatron = larguraRecorte * escalaLulatron
+        alturaLulatron = alturaRecorte * escalaLulatron
+        self.quads['lulatron'] = self.criarQuad(larguraLulatron / 2, alturaLulatron)
+        # textura com ~2 texels por pixel do mundo (perto da resolução da tela com o zoom da câmera)
+        self.resolucaoLulatron = (round(larguraLulatron * 2), round(alturaLulatron * 2))
+
         self.faces = np.array([
             0, 1, 2,
             0, 2, 3
@@ -154,6 +181,8 @@ class LulaObject:
             'esquerda': [Texture(ImageOps.mirror(img)).texId],
         }
 
+        self.texturas['lulatron'] = self.carregarSpritesLulatron()
+
         for pose, vertices in self.quads.items():
             self.vaos[pose] = self.enviarQuad(vertices)
 
@@ -188,6 +217,21 @@ class LulaObject:
         glBindVertexArray(0)                # o EBO fica gravado no VAO, então desativa o VAO primeiro
         glBindBuffer(GL_ARRAY_BUFFER, 0)
         return vao
+
+    def carregarSpritesLulatron(self):
+        # mesma estrutura dos outros visuais: texturas[pose][direção] -> lista de frames
+        def carregar(arquivo):
+            img = Image.open(os.path.join(PASTA_LULATRON, arquivo)).convert('RGBA').crop(RECORTE_LULATRON)
+            return pixelArt(img, self.resolucaoLulatron)
+
+        texturas = {}
+        for pose, porDirecao in SPRITES_LULATRON.items():
+            texturas[pose] = {direcao: [Texture(carregar(a)).texId for a in arquivos]
+                              for direcao, arquivos in porDirecao.items()}
+        # não existe parado para a esquerda: usa o espelho do parado para a direita
+        img = ImageOps.mirror(carregar(SPRITES_LULATRON['parado']['direita'][0]))
+        texturas['parado']['esquerda'] = [Texture(img).texId]
+        return texturas
 
     def carregarSprites(self, pastaVisual, pasta, resolucao=None):
         caminho = os.path.join(pastaVisual, pasta)
@@ -362,6 +406,9 @@ class LulaObject:
         return self.vida >= 2
 
     def visual(self):
+        # o Lulatron tem prioridade: fica com os sprites dele até o efeito acabar
+        if self.temLulatron():
+            return 'lulatron'
         return 'vermelho' if self.temPoder() else 'normal'
 
     def pegarPoder(self):
@@ -484,14 +531,20 @@ class LulaObject:
         else:
             self.shader.setFloat('uMisturaTinta', 0.0)
 
+        visual = self.visual()
         pose = self.poseAtual()
-        frames = self.texturas[self.visual()][pose][self.direcao]
+        sprites = self.texturas[visual]
+        # parado no chão: o Lulatron tem um sprite próprio (os outros usam o 1º quadro da caminhada)
+        if pose == 'andar' and not self.andando and 'parado' in sprites:
+            pose = 'parado'
+        frames = sprites[pose][self.direcao]
         frame = self.frameAtual if pose == 'andar' else 0
 
         glActiveTexture(GL_TEXTURE0)
         glBindTexture(GL_TEXTURE_2D, frames[frame % len(frames)])
 
-        glBindVertexArray(self.vaos[pose])
+        # o Lulatron usa o mesmo quad em todas as poses
+        glBindVertexArray(self.vaos['lulatron' if visual == 'lulatron' else pose])
         glDrawElements(GL_TRIANGLES, len(self.faces), GL_UNSIGNED_INT, None)
         glBindVertexArray(0)
 
